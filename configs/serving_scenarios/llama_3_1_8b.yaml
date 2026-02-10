@@ -1,0 +1,2 @@
+served_model_name: meta-llama/Llama-3.1-8B-Instruct
+devices: "0"
