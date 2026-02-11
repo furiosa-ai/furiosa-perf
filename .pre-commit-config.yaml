@@ -1,0 +1,67 @@
+default_install_hook_types:
+  - pre-commit
+  - commit-msg
+default_stages:
+  - pre-commit
+  - manual
+
+repos:
+  - repo: https://github.com/psf/black
+    rev: 23.7.0
+    hooks:
+      - id: black
+        language_version: python3.10
+        args: ["--line-length=120"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.7
+    hooks:
+      - id: ruff
+        name: ruff-lint
+        args:
+          [
+            "--fix",
+            "--select=E,F,W,I",
+            "--exit-non-zero-on-fix"
+          ]
+        language_version: python3.10
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.5.1
+    hooks:
+      - id: mypy
+        language_version: python3.10
+        args: ["--config-file=pyproject.toml"]
+        additional_dependencies:
+          - types-requests
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: local
+    hooks:
+      - id: pydoclint
+        name: pydoclint
+        entry: pydoclint
+        language: python
+        args: ["--style", "google", "furiosa_bench"]
+        additional_dependencies: [pydoclint]
+        types: [python]
+      - id: signoff-commit
+        name: Sign-off Commit
+        entry: bash
+        args:
+          - -c
+          - |
+            if ! grep -q "^Signed-off-by: $(git config user.name) <$(git config user.email)>" "$(git rev-parse --git-path COMMIT_EDITMSG)"; then
+              printf "\nSigned-off-by: $(git config user.name) <$(git config user.email)>\n" >> "$(git rev-parse --git-path COMMIT_EDITMSG)"
+            fi
+        language: system
+        verbose: true
+        stages: [commit-msg]
