@@ -75,11 +75,12 @@ class BenchmarkRunner:
             self.benchmark_config.model = pretrained_id
             self.benchmark_config.device_name = self.system_info.hardware[self.hardware_type]["name"]
             self.benchmark_config.used_device_num = len(self.api_server_config.devices.split(","))
-            print(self.benchmark_config)
             benchmark = VllmPerformanceBenchmark(
                 config=self.benchmark_config, 
                 backend=self.system_info.runtime, 
-                dev=dev
+                dev=dev,
+                host=api_server.config.host,
+                port=api_server.config.port,
             )
             benchmark.setup()
 

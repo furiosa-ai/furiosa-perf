@@ -69,6 +69,8 @@ class VllmPerformanceBenchmark:
         self,
         config: PerformanceBenchConfig,
         backend: str,
+        host: str | None = None,
+        port: int | None = None,
         dev: bool = False,
     ) -> None:
         self.name = config.name
@@ -80,6 +82,8 @@ class VllmPerformanceBenchmark:
         self.dev = 'dev' if dev else 'official'
         self.backend = backend
         self.total_results: dict[str, Any] = {}
+        self.host = host
+        self.port = port
 
         self.branch = self.ENV[self.dev]['BRANCH']
         self.repo_name = self.ENV[self.dev]['REPO_NAME']
@@ -151,6 +155,10 @@ class VllmPerformanceBenchmark:
         format_args = self._get_format_args(scenario)
 
         command = [arg.format(**format_args) for arg in (self.BASE_COMMAND + self.VLLM_COMMANDS[self.task])]
+        if self.host:
+            command.append(f"--host={self.host}")
+        if self.port:
+            command.append(f"--port={self.port}")
         return command
 
     def run(self) -> None:

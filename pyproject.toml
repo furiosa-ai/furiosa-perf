@@ -9,7 +9,7 @@ description = "Furiosa Performance Benchmarkk Test Tool"
 authors = [{name = "Furiosa AI Inc."}]
 license = {text="MIT"}
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 
 
 dependencies = [
@@ -32,8 +32,8 @@ dependencies = [
 furiosa-perf = "furiosa_perf.cli.main:cli"
 
 [project.optional-dependencies]
-furiosa-llm = ["furiosa-llm>=2025.3"]
-vllm = ["vllm>0.9.2"]
+furiosa-llm = ["furiosa-llm>=2026.1"]
+vllm = ["vllm>=0.13.0"]
 
 dev = [
     "pytest",
