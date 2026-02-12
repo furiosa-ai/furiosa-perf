@@ -165,11 +165,11 @@ class SystemDetector:
                 for row in reader:
                     if gpus['name'] != normalize_gpu_name(row['name']):
                         gpus['name'] = normalize_gpu_name(row['name'])
-                        gpus['memory'] = "{} GiB".format(round(int(row['memory.total [MiB]']) / (1024 * 1024), 2))
+                        gpus['memory'] = "{} GiB".format(round(int(row[' memory.total [MiB]']) / (1024 * 1024), 2))
                     gpus['devices'].append(
                         {
-                            "driver_version": row['driver_version'],
-                            "firmware_version": row['vbios_version']
+                            "driver_version": row[' driver_version'],
+                            "firmware_version": row[' vbios_version']
                         }
                     )
             else:
