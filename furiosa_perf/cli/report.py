@@ -9,6 +9,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import click
 import pandas as pd
+import yaml
 from jinja2 import Environment, PackageLoader, select_autoescape
 
 from furiosa_perf.reporting.charts import (
@@ -17,71 +18,54 @@ from furiosa_perf.reporting.charts import (
 from furiosa_perf.reporting.schemas import BenchmarkMetricLoader
 from furiosa_perf.reporting.theme import TABLE_COLUMNS
 
+def collect_all_models(raw_data_path: str) -> list[str]:
+    base = Path(raw_data_path)
+    raw_data_files = base.rglob(f"*/summary.csv")
+    models = set(sorted({p.parent.name for p in raw_data_files}))
+    return models
 
-def export_csv_bundle_zip(
-    raw_data_path: str,
-    target_model_list: list[str],
-    task: str,
-    export_path: str,
-) -> None:
-    zip_files = []
-    manifest_data = []
-    for target_model in target_model_list:
-        summary_csv_files = glob.glob(f"{raw_data_path}/*/*/{task}/{target_model}/*.csv")
-        if len(summary_csv_files) == 0:
-            continue
-
-        csv_bundle = []
-        for summary_csv_file in summary_csv_files:
-            info = summary_csv_file.split("/")[-5]
-            new_name = f"{target_model}_{info}_{task}.csv"
-            shutil.copy(summary_csv_file, f"{export_path}/{new_name}")
-            csv_bundle.append(f"{export_path}/{new_name}")
-
-        zip_file_name = f"{export_path}{target_model}_{task}.zip"
-        zip_files.append(zip_file_name)
-        with ZipFile(zip_file_name, "w", compression=ZIP_DEFLATED) as zf:
-            for path in csv_bundle:
-                p = Path(path)
-                zf.write(p, arcname=p.name)
-                os.remove(path)
-
-        manifest_data.append({"model": target_model, "task": task, "zip_file": zip_file_name})
-
-    with open(f"{export_path}/manifest.json", "w") as f:
-        json.dump(manifest_data, f)
+def collect_all_tasks(raw_data_path: str) -> list[str]:
+    base = Path(raw_data_path)
+    raw_data_files = base.rglob(f"*/summary.csv")
+    tasks = set(sorted({p.parent.parent.name for p in raw_data_files}))
+    return tasks
 
 
-def collect_and_build_plotly_report_html(
-    raw_data_path: str,
+def collect_and_build_report_html(
+    raw_data_files: list[str],
     target_model: str,
-    version: str = "2026.1.0",
-    task: str = "offline",
+    task: str = "offline"
 ) -> dict[str, Any]:
     total_df: list[pd.DataFrame] = []
-
-    summary_csv_files = glob.glob(f"{raw_data_path}/*/*/{task}/{target_model}/*.csv")
-    if len(summary_csv_files) == 0:
-        return {"model": target_model, "title": f"{target_model} Performance Analysis", "content": {f"{task}": []}}
-
-    for summary_csv_file in summary_csv_files:
-        df = BenchmarkMetricLoader.load_offline_benchmark_metric(summary_csv_file)
+    print(target_model)
+    for raw_data_file in raw_data_files:
+        df = BenchmarkMetricLoader.load_offline_benchmark_metric(raw_data_file)
         total_df.append(df)
 
-    total_df = pd.concat(total_df, ignore_index=True)
-
     report_charts = []
+
+    total_df = pd.concat(total_df, ignore_index=True)
+    
+    s = total_df["device"].dropna()
+    latest_furiosa_version = s.str.extract(r'furiosa-llm_(.*)')[0].dropna().max()
     for (input_tokens, output_tokens), group in total_df.groupby(["ISL", "OSL"]):
         tokens = f"{input_tokens}/{output_tokens}"
+
+        pat = latest_furiosa_version
+        if pd.isna(pat):
+            table_group = group.iloc[0:0]
+        else:
+            table_group = group[group["device"].str.contains(pat, na=False)]
+
         report_charts.append(
             {
                 "tokens": tokens,
                 "html": [
-                    plot_table_chart(group[group["device"].str.contains(version, na=False)], TABLE_COLUMNS).to_html(
+                    plot_table_chart(table_group, TABLE_COLUMNS).to_html(
                         full_html=False,
                         include_plotlyjs=False,
                         config=dict(responsive=True),
-                        div_id=f"{target_model}-{task}-{tokens}-rngd-{version}-table",
+                        div_id=f"{target_model}-{task}-{tokens}-rngd-{latest_furiosa_version}-table",
                     ),
                     plot_interactive_user_chart(
                         group,
@@ -134,75 +118,161 @@ def collect_and_build_plotly_report_html(
                 "key": "ISL / OSL"
             }
         },
+        "version": latest_furiosa_version,
     }
-
     return report_contents
 
 
-@click.command()  # type: ignore[misc]
-@click.option("--result-path", type=str, required=True)
+def save_report_html(report_contents: dict[str, Any], manifest_data: list[dict[str, Any]], report_path: str) -> None:
+    ENV = Environment(
+        loader=PackageLoader("furiosa_perf.reporting", "template"),
+        autoescape=select_autoescape(["html", "xml"]),
+    )
+    TEMPLATE = ENV.get_template("report.html")
+    html = TEMPLATE.render(**report_contents)
+
+    out_html = report_path / "index.html"
+    out_html.write_text(html, encoding="utf-8")
+
+    src = resources.files("furiosa_perf.reporting").joinpath("static")
+    dst = report_path / "static"
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+
+    src = resources.files("furiosa_perf.reporting").joinpath("template")
+    dst = report_path / "template"
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+
+    with open(f"{report_path}/manifest.json", "w") as f:
+        json.dump(manifest_data, f)
+    click.echo(f"Report generated successfully in {report_path}.")
+
+
+@click.command()
+@click.option(
+    "--benchmark-result-path",
+    type=str,
+    required=True,
+    help=(
+        "The path to the result directory for the benchmark. "
+        "We currently support the topology-based result directory."
+        "e.g., <benchmark_result_path>/vllm/<hardware_name>_<used_number_of_devices>_<runtime_version>/<tool_name>/<task_name>/<model_name>/*.csv"
+    )
+)
 @click.option(
     "--model-list",
     type=str,
     required=True,
-    default="EXAONE-4.0-32B-FP8,Qwen3-32B-FP8,Llama-3.1-8B-Instruct,Llama-3.1-70B-Instruct",
+    default = "all",
+    help=(
+        "The list of models to be included in the benchmark report (comma-separated list of model names)."
+        " If 'all' is specified, all models will be included."
+    )
 )
-@click.option("--output-dir", type=str, required=True, default="./")
-@click.option("--version", type=str, required=True, default="2026.1.0")
-def report(result_path: str, model_list: str, output_dir: str, version: str = "2026.1.0") -> None:
-    # TODO: summary 로직
-    model_list = model_list.split(",")
+@click.option(
+    "--task-list",
+    type=str,
+    required=True,
+    default="all",
+    help=(
+        "The list of tasks to be included in the benchmark report (comma-separated list of task names)."
+        " If 'all' is specified, all tasks will be included."
+    )
+)
+@click.option(
+    "--report-contents",
+    type=str,
+    required=False,
+    default="",
+    help=(
+        "The path of the report contents .yaml file path."
+        "If not specified, the report contents will be generated from the benchmark result."
+    )
+)
+@click.option(
+    "--report-path",
+    type=str,
+    default="./report",
+    help="The path to the output directory for the benchmark report (.html)"
+)
+def report(
+    benchmark_result_path: str,
+    model_list: str,
+    task_list: str,
+    report_contents: str,
+    report_path: str,
+) -> None:
+
+    if model_list == "all":
+        model_list = list(collect_all_models(benchmark_result_path))
+    else:
+        model_list = model_list.split(",")
+    
+    if task_list == "all":
+        task_list = list(collect_all_tasks(benchmark_result_path))
+    else:
+        task_list = task_list.split(",")
+
+    if not Path(f"{report_path}/csv").exists():
+        os.makedirs(f"{report_path}/csv", exist_ok=True)
+
+    out_dir = Path(report_path).expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    os.makedirs(out_dir / "csv", exist_ok=True)
 
     items = []
-    task_list = ["offline"]
+    manifest_data = []
     for model in model_list:
         for task in task_list:
-            items.append(collect_and_build_plotly_report_html(result_path, model, version, task))
+            raw_data_files = list(Path(benchmark_result_path).rglob(f"{task}/{model}/summary.csv"))
+            if len(raw_data_files) == 0:
+                print(f"No summary.csv file found for {model} in {benchmark_result_path}")
+                continue
+            
+            items.append(
+                collect_and_build_report_html(
+                    raw_data_files,
+                    model, 
+                    task
+                )
+            )
 
-    context = {
-        "title": "FuriosaAI's RNGD with furiosa-llm Benchmark Report",
-        "description": (
-            """
-        This report summarizes the AI inference performance of various devices as measured in July 2025 using FuriosaAI SDK version 2025.4.
-        """
-        ),
-        "model_list": model_list,
-        "task_list": task_list,
-        "items": items,
-        "theme": "dark",
-        "css_path": "./static/custom.css",
-        "version": "2026.1.0rc0",
-    }
+            csv_bundle = [] 
+            for raw_data_file in raw_data_files:
+                new_file_name = f"{model}_{raw_data_file.parents[3].name}_{task}.csv"
+                shutil.copy(raw_data_file, f"{out_dir / 'csv'}/{new_file_name}")
+                csv_bundle.append(f"{out_dir / 'csv'}/{new_file_name}")
+            
+            zip_file_name = f"{out_dir}/csv/{model}_{task}.zip"
+            with ZipFile(zip_file_name, "w", compression=ZIP_DEFLATED) as zf:
+                for path in csv_bundle:
+                    p = Path(path)
+                    zf.write(p, arcname=p.name)
+                    os.remove(path)
 
-    ENV = Environment(
-        loader=PackageLoader("furiosa_bench.report", "template"),
-        autoescape=select_autoescape(["html", "xml"]),
-    )
-    TEMPLATE = ENV.get_template("report.html")
-    html = TEMPLATE.render(**context)
+            manifest_data.append({"model": model, "task": task, "zip_file": zip_file_name})
 
-    out_dir = Path(output_dir).expanduser().resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if report_contents:
+        with open(report_contents, "r") as f:
+            report_contents = yaml.load(f)
+    else:
+        report_contents = {
+            "title": "FuriosaAI's RNGD with furiosa-llm Benchmark Report",
+            "abstract": (
+                """
+                In alignment with the mass production of the RNGD chip in January 2026, we have continuously optimized the SDK end-to-end to enable fast, reliable serving of major LLMs such as EXAONE 4.0, Qwen 3, and Llama 3.3 in real-world production workloads. We fundamentally renewed the compiler architecture, moving from a whole-block compilation approach to a composable-kernel design that enables Sarathi Serve–style online scheduling, including true mixed prefill/decode batching. Concretely, the compiler factorizes execution into reusable building blocks: batch-agnostic tokenwise kernels for shared per-token compute and attention-bucket kernels for batch- and KV-cache–dependent work. These blocks can then be composed at runtime to match the current request mix and avoid prefill-driven disruption of in-flight decode. This shift was complemented by end-to-end optimization across kernels, runtime, and the serving stack. In parallel, we refined an analysis framework that translates these performance gains into actionable customer purchasing and operations decision metrics, including SLO-constrained peak concurrent user capacity, scalability under power and datacenter space constraints, and total cost of ownership (TCO) considerations.
+                \n
+                This report shows that SDK 2026.1 shifts competitiveness from headline throughput under matched settings to scalable, SLO-compliant capacity under realistic operating constraints. We evaluate the changes since SDK 2025.3 (July 2025) using both standard serving metrics (TTFT, TPOT, power efficiency) and an operations-oriented methodology: for each model, we sweep the feasible configuration space (device count, topology and parallelization, serving and scheduling options, and bucket settings) and compute (i) the maximum concurrency that satisfies target SLOs and (ii) the associated cost efficiency. This framing enables apples-to-apples comparisons across platforms by answering a single practical question: which system delivers the most admissible load per dollar and per rack under the service’s target SLO regime?
+                """
+            ),
+            "model_list": model_list,
+            "task_list": task_list,
+            "items": items,
+            "theme": "dark",
+        }
 
-    html = TEMPLATE.render(**context)
-    out_html = out_dir / "index.html"
-    out_html.write_text(html, encoding="utf-8")
-
-    # static 복사: furiosa_bench.report/_static -> out_dir/static
-    src = resources.files("furiosa_bench.report").joinpath("static")
-    dst = out_dir / "static"
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(src, dst)
-
-    src = resources.files("furiosa_bench.report").joinpath("template")
-    dst = out_dir / "template"
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(src, dst)
-
-    if not (out_dir / "csv").exists():
-        os.makedirs(out_dir / "csv", exist_ok=True)
-    export_csv_bundle_zip(result_path, model_list, task, f"{out_dir}/csv/")
-
-    click.echo(f"Report generated successfully in {out_dir}.")
+    save_report_html(report_contents, manifest_data, out_dir)
+    return

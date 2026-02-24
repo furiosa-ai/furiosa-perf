@@ -301,8 +301,8 @@ def plot_rack_performance_chart(df: pd.DataFrame) -> go.Figure:
         y = group["TPS/User"].to_numpy()
         a, b = HyperbolicModel.fit_hyperbolic_model(x, y)
         max_conc = HyperbolicModel.max_conc_from_fit(a, b, INIT_SLO)
-        device_name, info = device.split(" x ")
-        num_device, version = info.split(" + ") if " + " in info else (info, "")
+        device_name, info = device.split("x")
+        num_device, _ = info.split("+")
         server_power = (
             3000 if ("TARGET" in device_name or "RNGD" in device_name) else SERVER_POWER_CONSUMPTION[device_name]
         )

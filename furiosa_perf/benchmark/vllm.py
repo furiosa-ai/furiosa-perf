@@ -90,7 +90,7 @@ class VllmPerformanceBenchmark:
 
         self.base_dir =  self.get_base_dir()
         self.repo_dir = self.base_dir / self.repo_name
-        self.venv_dir = self.base_dir / "venv"
+        self.venv_dir = self.base_dir / f"{config.name}_venv"
         self.python_exe = (self.venv_dir / "bin" / "python").absolute()
 
         self.SETUP_COMMANDS = [
@@ -274,12 +274,16 @@ class VllmPerformanceBenchmark:
             isl_osl = self._to_isl_osl_result(sub_result["Input Tokens"], sub_result["Output Tokens"])
             isl_osl_result[isl_osl].append(list(sub_result.values()))
         
+        total_md_contents = []
+        total_csv_contents = []
         for isl_osl, result in isl_osl_result.items():
             md_contents = []
             csv_contents = [",".join(md_writer.headers)]
             for sub_result in result:
                 md_contents.append(sub_result)
-                csv_contents.append(",".join([str(value) for value in sub_result]))        
+                csv_contents.append(",".join([str(value) for value in sub_result]))
+                total_md_contents.append(sub_result)
+                total_csv_contents.append(",".join([str(value) for value in sub_result]))
             
             md_writer.value_matrix = md_contents
             logger.info(
@@ -297,6 +301,13 @@ class VllmPerformanceBenchmark:
             with Path.open(self.get_vllm_result_dir("") / f"summary_{isl_osl}.csv", "w") as f:
                 f.write(desc + "\n" + "\n".join(csv_contents) + "\n")
 
+        md_writer.value_matrix = total_md_contents
+        with Path.open(self.get_vllm_result_dir("") / f"summary.md", "w") as f:
+            f.write(desc + "\n" + md_writer.dumps() + "\n")
+
+        with Path.open(self.get_vllm_result_dir("") / f"summary.csv", "w") as f:
+            f.write(desc + "\n" + "\n".join(total_csv_contents) + "\n")
+
     def _to_isl_osl_result(self, input_tokens: int, output_tokens: int) -> str:
         isl = f"{input_tokens//1024}k" if input_tokens >= 1024 else str(input_tokens)
         osl = f"{output_tokens//1024}k" if output_tokens >= 1024 else str(output_tokens)
@@ -306,15 +317,14 @@ class VllmPerformanceBenchmark:
         workspace = Path(f"{WORKSPACE}")
 
         workspace.mkdir(parents=True, exist_ok=True)
-        base_dir = workspace / self.name
-        return base_dir
+        return workspace
 
     def get_vllm_result_dir(self, result_name: str) -> Path:
         """Return the benchmark result directory."""
         task_name = f"dev-{self.task}" if self.dev == "dev" else self.task
         result_dir = Path(
             self.base_dir
-            / f"{self.device_name}_{self.used_device_num}_{self.backend}"
+            / f"{self.device_name}_{self.backend}_{self.used_device_num}"
             / self.name
             / task_name
             / self.model.split("/")[-1]

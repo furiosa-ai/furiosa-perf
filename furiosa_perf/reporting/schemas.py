@@ -1,46 +1,23 @@
 import numpy as np
 import pandas as pd
 from scipy.optimize import OptimizeWarning, curve_fit
-import re
 from pathlib import Path
-
-VLLM_VERSION = "0.13.0"
 
 
 class BenchmarkMetricLoader:
     @staticmethod
-    def _extract_device_folder(summary_csv_path: str) -> str:
+    def _extract_device_and_version(summary_csv_path: str) -> tuple[str, str]:
         """Extract device folder name from a summary.csv path.
 
         Expected folder pattern (from benchmark output):
-            <DEVICE>_<NUM>_<BACKEND>_<VERSION>
+            <DEVICE>_<BACKEND>_<VERSION>_<NUM>
         Examples:
-            RNGD_4_furiosa-llm_2026.1.0rc2
-            H100_8_vllm_0.13.0
+            RNGD_furiosa-llm_2026.1.0rc2_4
+            H100_vllm_0.13.0_8
         """
         p = Path(summary_csv_path)
-        pat = re.compile(r"^[\w-]+_\d+_(?:furiosa-llm|vllm)_.+")
-        for part in p.parts:
-            if pat.match(part):
-                return part
-        # Fallback: keep legacy behavior if we can't find a match.
-        parts = summary_csv_path.split("/")
-        return parts[-5] if len(parts) >= 5 else "unknown_0_unknown"
-
-    @staticmethod
-    def _extract_model_info_line(summary_csv_path: str) -> str:
-        """Best-effort extraction of '* Model Info:' header line."""
-        try:
-            with open(summary_csv_path, "r", encoding="utf-8") as f:
-                for _ in range(50):
-                    line = f.readline()
-                    if not line:
-                        break
-                    if line.startswith("* Model Info:"):
-                        return line.strip()
-        except OSError:
-            pass
-        return ""
+        device, backend, version, num = p.parents[3].name.split("_")
+        return device, backend, version, num
 
     @staticmethod
     def load_offline_benchmark_metric(
@@ -55,27 +32,14 @@ class BenchmarkMetricLoader:
         )
 
         def col(name: str, default: float = 0.0) -> pd.Series:
-            """df_temp에 name이 있으면 numeric Series, 없으면 default로 채운 Series"""
+            """If the DataFrame contains 'name', return a numeric Series. 
+            Otherwise, return a Series filled with the default value."""
             if name in df.columns:
                 return pd.to_numeric(df[name], errors="coerce").fillna(default)
             return pd.Series(default, index=df.index, dtype="float64")
 
-        device_folder = BenchmarkMetricLoader._extract_device_folder(summary_csv_path)
-        parts = device_folder.split("_")
-        device_name = parts[0] if len(parts) > 0 else "Unknown"
-        num_devices = parts[1] if len(parts) > 1 else "0"
-        runtime = "_".join(parts[2:]) if len(parts) > 2 else ""
+        device, num, backend, version = BenchmarkMetricLoader._extract_device_and_version(summary_csv_path)
 
-        # Prefer including runtime/version info so the report can filter by `--version`.
-        if runtime:
-            suffix = f" + {runtime}"
-        elif not ("RNGD" in device_name or "TARGET" in device_name):
-            suffix = f" + vllm-{VLLM_VERSION}"
-        else:
-            suffix = ""
-
-        if "RNGD" in device_name:
-            device_name = device_name.split("-", 1)[0]
         new_df = pd.DataFrame(
             {
                 "ISL": col("input_tokens"),
@@ -94,11 +58,10 @@ class BenchmarkMetricLoader:
                 "P99_TPOT(ms)": (col("p99_tpot")).round(2),
                 "E2EL(s)": (col("mean_e2el")).round(2),
                 "Power(w)": col("mean_power", 0.0),
-                "device": f"{device_name} x {num_devices}{suffix}",
+                "device": f"{device}x{num}+{backend}_{version}",
             }
         )
         return new_df
-
 
 class HyperbolicModel:
     @staticmethod
@@ -113,7 +76,7 @@ class HyperbolicModel:
             return x / (y + z)
 
         try:
-            popt, _ = curve_fit(hyperbolic_ctp, x, y, p0=[a_init, b_init], maxfev=5000)
+            popt, _ = curve_fit(hyperbolic_ctp, x, y, p0=[a_init, b_init], maxfev=5000, sigma=np.ones_like(y) * 0.01, absolute_sigma=True)
             a, b = float(popt[0]), float(popt[1])
             if not (np.isfinite(a) and np.isfinite(b) and a > 0 and b >= 0):
                 raise Exception

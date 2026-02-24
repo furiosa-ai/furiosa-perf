@@ -38,20 +38,19 @@ class InteractiveChartSettings:
 
 
 DEVICE_COLOR_MAP = {
-    "RNGD": ["#5A0000", "#FF0000", "#E21500", "#FF3D00", "#FF6D00", "#FF5252"],
+    "RNGD": ["#5A0000", "#FF0000", "#E21500", "#FF3D00", "#FF6D00", "#FF5252", "#FF8787"],
     "TARGET": ["#9B9B9B", "#A78581", "#B36E67", "#CA4234"],
-    "A100": ["#FFFA82", "#70E697", "#76D6FF"],
+    "A100-80GB": ["#FFFA82", "#70E697", "#76D6FF"],
     "A100-PCIe": [],
-    "H100": ["#A7C7E7", "#A8D5BA", "#ffffff"],
+    "H100-80GB": ["#A7C7E7", "#A8D5BA", "#ffffff"],
     "H100-PCIe": [],
     "RTX-PRO-6000": ["#F7E1A0", "#9AD0EC", "#F6C28B"],
 }
 
 
 def get_device_color(info: str, RNGD_IDX: list[tuple[str, int]]) -> str:
-    hardware_info, version_info = info.split(" + ") if " + " in info else (info, "")
-    device_name, used_device_num = hardware_info.split(" x ")
-
+    hardware_info, backend_info = info.split("+")
+    device_name, used_device_num = hardware_info.split("x")
     color = "#000000"
     if "RNGD" not in device_name and "TARGET" not in device_name:
         device_color_list = DEVICE_COLOR_MAP[device_name]
@@ -74,8 +73,8 @@ def get_device_color(info: str, RNGD_IDX: list[tuple[str, int]]) -> str:
 
 
 SERVER_POWER_CONSUMPTION = {
-    "H100": 10200,
-    "A100": 7600,
+    "H100-80GB": 10200,
+    "A100-80GB": 7600,
     "RTX-PRO-6000": 6600,
     "H200": 5000,
 }
