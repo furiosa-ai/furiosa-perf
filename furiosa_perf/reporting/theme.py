@@ -42,7 +42,7 @@ DEVICE_COLOR_MAP = {
     "TARGET": ["#9B9B9B", "#A78581", "#B36E67", "#CA4234"],
     "A100-80GB": ["#FFFA82", "#70E697", "#76D6FF"],
     "A100-PCIe": [],
-    "H100-80GB": ["#A7C7E7", "#A8D5BA", "#ffffff"],
+    "H100-80GB": ["#A7C7E7", "#A8D5BA", "#ffffff", "#ffffff"],
     "H100-PCIe": [],
     "RTX-PRO-6000": ["#F7E1A0", "#9AD0EC", "#F6C28B"],
 }

@@ -108,7 +108,7 @@ YAML file for API server launch settings (options differ by backend).
 Example (`examples/server/exaone.yaml`):
 
 ```yaml
-devices: 0,1,2,3
+devices: "0,1,2,3"
 ```
 
 Common keys (partial):

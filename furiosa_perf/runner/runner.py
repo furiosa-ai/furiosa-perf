@@ -85,10 +85,15 @@ class BenchmarkRunner:
             benchmark.setup()
 
             stop_monitor_event = multiprocessing.Event()
+            if api_server.server_process is not None:
+                server_pid = api_server.server_process.pid
+            else:
+                server_pid = -1
+
             monitoring_proc = HardwareMonitor.start_monitor(
                 api_server.config.host,
                 api_server.config.port,
-                api_server.server_process.pid,
+                server_pid,
                 benchmark.device_name,
                 benchmark.used_device_num,
                 benchmark.base_dir,

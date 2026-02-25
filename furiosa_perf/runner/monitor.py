@@ -170,8 +170,9 @@ class HardwareMonitor:
         devices = furiosa_smi_py.list_devices()
         observer = furiosa_smi_py.create_default_observer()
 
-        parent = psutil.Process(server_pid)
-        parent.cpu_percent(None)
+        if server_pid != -1:
+            parent = psutil.Process(server_pid)
+            parent.cpu_percent(None)
 
         try:
             with open(result_file_path, "w") as f:
@@ -198,7 +199,7 @@ class HardwareMonitor:
                             data.power_consumption += power_consumption
                             data.peak_temperature = max(data.peak_temperature, temperature)
                             data.avg_utilization += utilization
-
+                
                     metrics_text = HardwareMonitor._fetch_metrics_text(host, port)
                     if metrics_text is None:
                         f.write(str(data))
@@ -214,9 +215,14 @@ class HardwareMonitor:
                         if line.startswith("furiosa_llm_num_requests_waiting"):
                             data.num_requests_waiting = float(line.split()[-1])
 
-                    tree_cpu, rss_gib = HardwareMonitor._get_process_tree_usage(
-                        parent
-                    )
+                    if server_pid != -1:
+                        tree_cpu, rss_gib = HardwareMonitor._get_process_tree_usage(
+                            parent
+                        )
+                    else:
+                        tree_cpu = 0.0
+                        rss_gib = 0.0
+
                     data.host_cpu_utils = tree_cpu
                     data.host_memory_usage_gib = rss_gib
 
@@ -236,8 +242,9 @@ class HardwareMonitor:
         interval: float = 1.0,
     ) -> None:
         """Monitor NVIDIA GPU status and server metrics, writing CSV rows."""
-        parent = psutil.Process(server_pid)
-        parent.cpu_percent(None)
+        if server_pid != -1:
+            parent = psutil.Process(server_pid)
+            parent.cpu_percent(None)
 
         try:
             with open(result_file_path, "w") as f:
@@ -295,9 +302,14 @@ class HardwareMonitor:
                         if line.startswith("vllm:num_requests_waiting"):
                             data.num_requests_waiting = float(line.split()[-1])
 
-                    tree_cpu, rss_gib = HardwareMonitor._get_process_tree_usage(
-                        parent
-                    )
+                    if server_pid != -1:
+                        tree_cpu, rss_gib = HardwareMonitor._get_process_tree_usage(
+                            parent
+                        )
+                    else:
+                        tree_cpu = 0.0
+                        rss_gib = 0.0
+                        
                     data.host_cpu_utils = tree_cpu
                     data.host_memory_usage_gib = rss_gib
 
