@@ -105,7 +105,7 @@ class BenchmarkRunner:
             raise RuntimeError(f"Benchmark failed: {e}")
         finally:
             # server stop
-            if stop_monitor_event is not None:
+            if monitoring_proc is not None:
                 stop_monitor_event.set()
                 monitoring_proc.join()
             

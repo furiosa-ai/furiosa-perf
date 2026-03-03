@@ -11,6 +11,7 @@ class APIServerConfig:
     enable_expert_parallel: bool | None = None
     data_parallel_size: int = 1
     devices: str | None = None  # comma separated list of deviceps IDs
+    served_model_name: str | None = None
 
 @dataclass
 class VllmServerConfig(APIServerConfig):
@@ -45,7 +46,6 @@ class FuriosaLLMServerConfig(APIServerConfig):
     max_num_batched_tokens: int | None = None
     max_num_prompt_tokens: int | None = None
     prefix_cache_lookahead_requests: int | None = None
-    served_model_name: str | None = None
 
     def __post_init__(self) -> None:
         # case 1 -> tp is None, devices is None       

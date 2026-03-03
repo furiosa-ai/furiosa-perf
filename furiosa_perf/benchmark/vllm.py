@@ -275,7 +275,7 @@ class VllmPerformanceBenchmark:
             isl_osl_result[isl_osl].append(list(sub_result.values()))
         
         total_md_contents = []
-        total_csv_contents = []
+        total_csv_contents = [",".join(md_writer.headers)]
         for isl_osl, result in isl_osl_result.items():
             md_contents = []
             csv_contents = [",".join(md_writer.headers)]
@@ -324,7 +324,7 @@ class VllmPerformanceBenchmark:
         task_name = f"dev-{self.task}" if self.dev == "dev" else self.task
         result_dir = Path(
             self.base_dir
-            / f"{self.device_name}_{self.backend}_{self.used_device_num}"
+            / f"{self.device_name}_{self.used_device_num}_{self.backend}"
             / self.name
             / task_name
             / self.model.split("/")[-1]

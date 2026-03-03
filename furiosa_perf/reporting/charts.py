@@ -14,6 +14,34 @@ from furiosa_perf.reporting.theme import (
 )
 
 
+def add_legend_panel(fig, num_devices, x0, x1=1.2, pad_px=0):
+
+    font_size = 14
+    itemheight = (font_size + 6)  # 대충 추정치
+
+    height = fig.layout.height or 600
+    margin = fig.layout.margin
+    mt = margin.t if margin and margin.t is not None else 80
+    mb = margin.b if margin and margin.b is not None else 80
+    plot_h = max(1, height - mt - mb)
+    legend_h_px = num_devices * itemheight + pad_px*2
+    legend_h_paper = legend_h_px / (plot_h // 2)
+    y1 = 1.03
+
+    y0 = y1 - legend_h_paper
+
+    fig.add_shape(
+        type="rect",
+        xref="paper", yref="paper",
+        x0=x0, x1=x1,
+        y0=y0, y1=y1,
+        fillcolor="rgba(20,20,20,0.65)",
+        line=dict(color="rgba(255,255,255,0.15)", width=1),
+        layer="below",
+        name="legend_panel",
+    )
+    return fig
+
 def plot_table_chart(df: pd.DataFrame, columns: list[str]) -> go.Figure:
     table_chart_theme = TableChartSettings()
 
@@ -140,10 +168,11 @@ def plot_line_chart(
                 xsizemode="pixel",
                 xanchor=1.0,
                 x0=0,
-                x1=line_chart_theme.panel_w,
+                x1=line_chart_theme.panel_w + 30,
                 y0=0,
                 y1=1.0,
                 fillcolor="rgba(20,20,20,0.65)",
+                line=dict(color="rgba(255,255,255,0.15)", width=1),
                 layer="below",
             )
         ],
@@ -276,19 +305,7 @@ def plot_interactive_user_chart(
         height=900,
     )
 
-    entire_chart.add_shape(
-        type="rect",
-        xref="paper",
-        yref="paper",
-        x0=interactive_chart_theme.column_widths_left,
-        x1=1.03,
-        y0=interactive_chart_theme.column_height_upper - 0.02,
-        y1=1.03,
-        fillcolor="rgba(20,20,20,0.65)",
-        line=dict(color="rgba(255,255,255,0.15)", width=1),
-        layer="below",
-        name="legend_panel",
-    )
+    entire_chart = add_legend_panel(entire_chart, num_devices, interactive_chart_theme.column_widths_left)
     return entire_chart
 
 
