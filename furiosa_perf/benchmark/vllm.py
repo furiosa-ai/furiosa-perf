@@ -1,5 +1,6 @@
 import os
 import venv
+import signal
 import subprocess
 
 from collections import defaultdict
@@ -14,6 +15,7 @@ from furiosa_perf.configs.settings import PerformanceBenchConfig, ScenarioConfig
 
 WORKSPACE = "./bench_space"
 
+
 class VllmPerformanceBenchmark:
     ENV = {
         "dev": {
@@ -22,21 +24,28 @@ class VllmPerformanceBenchmark:
             "REPO_NAME": "custom-vllm",
             "SETUP_COMMANDS": [
                 ("down_benchmark", ["git", "clone", "{REPO_URL}", "-b", "{BRANCH}", "{REPO_NAME}"]),
-                ("install_package", ['{python_exe}', '-m', 'pip', 'install', '-r', '{REPO_NAME}/requirements/common.txt'])
-            ]
+                (
+                    "install_package",
+                    ["{python_exe}", "-m", "pip", "install", "-r", "{REPO_NAME}/requirements/common.txt"],
+                ),
+            ],
         },
-        'official': {
+        "official": {
             "REPO_URL": "https://github.com/vllm-project/vllm.git",
             "BRANCH": "releases/v0.13.0",
             "REPO_NAME": "official-vllm",
             "SETUP_COMMANDS": [
                 ("down_benchmark", ["git", "clone", "{REPO_URL}", "-b", "{BRANCH}", "{REPO_NAME}"]),
-                ("install_package", ['{python_exe}', '-m', 'pip', 'install', 'vllm==0.13.0'])
-            ]
-        }
+                ("install_package", ["{python_exe}", "-m", "pip", "install", "vllm==0.13.0"]),
+            ],
+        },
     }
     COMMAND: list[str] = [
-        "{exe}", "-m", "vllm.entrypoints.cli.main", "bench", "serve",
+        "{exe}",
+        "-m",
+        "vllm.entrypoints.cli.main",
+        "bench",
+        "serve",
         "--percentile-metrics=ttft,tpot,itl,e2el",
         "--metric-percentiles=25,50,75,90,95,99",
         "--max-concurrency={max_concurrency}",
@@ -46,7 +55,7 @@ class VllmPerformanceBenchmark:
         "--ignore-eos",
         "--save-result",
         "--result-dir={result_dir}",
-        "--ready-check-timeout-sec=0"
+        "--ready-check-timeout-sec=0",
     ]
     VLLM_COMMANDS: dict[str, list[str]] = {
         "offline": [
@@ -79,33 +88,38 @@ class VllmPerformanceBenchmark:
         self.used_device_num = config.used_device_num
         self.task = config.task
         self.scenarios = config.scenarios
-        self.dev = 'dev' if dev else 'official'
+        self.dev = "dev" if dev else "official"
         self.backend = backend
         self.total_results: dict[str, Any] = {}
         self.host = host
         self.port = port
+        self.bench_process = None
 
-        self.branch = self.ENV[self.dev]['BRANCH']
-        self.repo_name = self.ENV[self.dev]['REPO_NAME']
+        self.branch = self.ENV[self.dev]["BRANCH"]
+        self.repo_name = self.ENV[self.dev]["REPO_NAME"]
 
-        self.base_dir =  self.get_base_dir()
+        self.base_dir = self.get_base_dir()
         self.repo_dir = self.base_dir / self.repo_name
         self.venv_dir = self.base_dir / f"{config.name}_venv"
         self.python_exe = (self.venv_dir / "bin" / "python").absolute()
 
         self.SETUP_COMMANDS = [
-            (key, [arg.format(
-                REPO_URL=self.ENV[self.dev]['REPO_URL'], 
-                BRANCH=self.branch, 
-                REPO_NAME=self.ENV[self.dev]['REPO_NAME'], 
-                python_exe=self.python_exe) for arg in arg_list])
-            for key, arg_list in self.ENV[self.dev]['SETUP_COMMANDS']
+            (
+                key,
+                [
+                    arg.format(
+                        REPO_URL=self.ENV[self.dev]["REPO_URL"],
+                        BRANCH=self.branch,
+                        REPO_NAME=self.ENV[self.dev]["REPO_NAME"],
+                        python_exe=self.python_exe,
+                    )
+                    for arg in arg_list
+                ],
+            )
+            for key, arg_list in self.ENV[self.dev]["SETUP_COMMANDS"]
         ]
 
-        self.BASE_COMMAND = [
-            arg.replace("{exe}", f"{str(self.python_exe)}")
-            for arg in self.COMMAND
-        ]
+        self.BASE_COMMAND = [arg.replace("{exe}", f"{str(self.python_exe)}") for arg in self.COMMAND]
         self.log_init()
 
     def start_info(self) -> None:
@@ -177,26 +191,28 @@ class VllmPerformanceBenchmark:
             logger.info(f"Executing: {' '.join(command)} | cwd: {cwd}")
 
             start_timestamp = datetime.now(timezone.utc).isoformat()
-            process = subprocess.Popen(
+            self.bench_process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.DEVNULL,
                 text=True,
                 cwd=cwd,
                 bufsize=1,
+                start_new_session=True
             )
             output_lines = []
-            if process.stdout is not None:
-                for line in process.stdout:
+            if self.bench_process.stdout is not None:
+                for line in self.bench_process.stdout:
                     logger.info(line.strip())
                     output_lines.append(line)
 
-            process.wait()
-            if process.returncode != 0:
-                raise RuntimeError(f"Benchmark execution failed - Command failed with code {process.returncode}")
+            self.bench_process.wait()
+            if self.bench_process.returncode != 0:
+                raise RuntimeError(f"Benchmark execution failed - Command failed with code {self.bench_process.returncode}")
+            self.bench_process = None
 
             end_timestamp = datetime.now(timezone.utc).isoformat()
-            result = self._parse_results("".join(output_lines), scenario)   
+            result = self._parse_results("".join(output_lines), scenario)
 
             result.update(
                 HardwareMonitor.get_benchmark_power_summary(
@@ -247,7 +263,6 @@ class VllmPerformanceBenchmark:
                 results[f"{metric.title()} E2EL(s)"] = round(float(score) / 1000.0, 2)
         return results
 
-
     def finish_info(self, full: bool = False, desc: str = "") -> None:
         scenario_results = self.total_results["results"]
 
@@ -273,7 +288,7 @@ class VllmPerformanceBenchmark:
         for sub_result in scenario_results:
             isl_osl = self._to_isl_osl_result(sub_result["Input Tokens"], sub_result["Output Tokens"])
             isl_osl_result[isl_osl].append(list(sub_result.values()))
-        
+
         total_md_contents = []
         total_csv_contents = [",".join(md_writer.headers)]
         for isl_osl, result in isl_osl_result.items():
@@ -284,7 +299,7 @@ class VllmPerformanceBenchmark:
                 csv_contents.append(",".join([str(value) for value in sub_result]))
                 total_md_contents.append(sub_result)
                 total_csv_contents.append(",".join([str(value) for value in sub_result]))
-            
+
             md_writer.value_matrix = md_contents
             logger.info(
                 "\n".join(
@@ -334,3 +349,18 @@ class VllmPerformanceBenchmark:
             result_dir.mkdir(parents=True)
 
         return result_dir.resolve()
+
+    def stop(self) -> None:
+        if self.bench_process is None:
+            return
+        
+        if self.bench_process.poll() is None:
+            try:
+                os.killpg(os.getpgid(self.bench_process.pid), signal.SIGTERM)
+                self.bench_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(os.getpgid(self.bench_process.pid), signal.SIGKILL)
+        else:
+            exit_code = self.bench_process.poll()
+        
+        self.bench_process = None

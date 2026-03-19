@@ -5,6 +5,7 @@ import time
 from dataclasses import asdict
 
 import requests
+import psutil
 
 from furiosa_perf.configs.settings import APIServerConfig, FuriosaLLMServerConfig, VllmServerConfig
 from furiosa_perf.utils.logger import logger
@@ -20,6 +21,7 @@ class APIServerManager:
         self.config = config
         self.server_process: subprocess.Popen[str] | None = None
         self.server_ready = False
+        self.server_pid = -1
 
     def __del__(self) -> None:
         self.stop()
@@ -27,10 +29,12 @@ class APIServerManager:
     def start(self) -> None:
         if self._is_api_server_ready(self.model):
             logger.warning(f"API server is already running for model: {self.model}")
+            self._get_opened_server_pid()
             return
 
         if self.server_process and self.server_process.poll() is None:
             logger.warning("Server already running")
+            self._get_opened_server_pid()
             return
 
         command, env = self._build_command()
@@ -50,6 +54,7 @@ class APIServerManager:
 
         self._wait_for_startup(url=f"http://{self.config.host}:{self.config.port}/v1/models")
         self.server_ready = True
+        self.server_pid = self.server_process.pid
         logger.info("Server is ready")
         return " ".join(command)
 
@@ -166,3 +171,16 @@ class APIServerManager:
 
             logger.info("Waiting for server launch. Check after 30 seconds")
             time.sleep(30)
+
+    def _get_opened_server_pid(self):
+        process_name = ""
+        if isinstance(self.config, VllmServerConfig):
+            process_name = "vllm"
+        elif isinstance(self.config, FuriosaLLMServerConfig):
+            process_name = "furiosa-llm"
+        else:
+            return 
+
+        for proc in psutil.process_iter(['pid', 'name']):
+            if proc.info['name'] == process_name:
+                self.server_pid = proc.info['pid']

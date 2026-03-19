@@ -25,7 +25,8 @@ dependencies = [
     "scipy>=1.10.0",
     "huggingface-hub",
     "types-requests",
-    "pytablewriter"
+    "pytablewriter",
+    "psutil"
 ]
 
 [project.scripts]

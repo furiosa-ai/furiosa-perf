@@ -13,16 +13,22 @@ import yaml
 from jinja2 import Environment, PackageLoader, select_autoescape
 
 from furiosa_perf.reporting.charts import (
-    plot_interactive_user_chart, plot_rack_performance_chart, plot_table_chart, plot_ttft_or_tpot_chart, plot_line_chart
+    plot_interactive_user_chart,
+    plot_rack_performance_chart,
+    plot_table_chart,
+    plot_ttft_or_tpot_chart,
+    plot_line_chart,
 )
 from furiosa_perf.reporting.schemas import BenchmarkMetricLoader
 from furiosa_perf.reporting.theme import TABLE_COLUMNS
+
 
 def collect_all_models(raw_data_path: str) -> list[str]:
     base = Path(raw_data_path)
     raw_data_files = base.rglob(f"*/summary.csv")
     models = set(sorted({p.parent.name for p in raw_data_files}))
     return models
+
 
 def collect_all_tasks(raw_data_path: str) -> list[str]:
     base = Path(raw_data_path)
@@ -32,9 +38,7 @@ def collect_all_tasks(raw_data_path: str) -> list[str]:
 
 
 def collect_and_build_report_html(
-    raw_data_files: list[str],
-    target_model: str,
-    task: str = "offline"
+    raw_data_files: list[str], target_model: str, task: str = "offline"
 ) -> dict[str, Any]:
     total_df: list[pd.DataFrame] = []
     print(target_model)
@@ -45,9 +49,9 @@ def collect_and_build_report_html(
     report_charts = []
 
     total_df = pd.concat(total_df, ignore_index=True)
-    
+
     s = total_df["device"].dropna()
-    latest_furiosa_version = s.str.extract(r'furiosa-llm_(.*)')[0].dropna().max()
+    latest_furiosa_version = s.str.extract(r"furiosa-llm_(.*)")[0].dropna().max()
     for (input_tokens, output_tokens), group in total_df.groupby(["ISL", "OSL"]):
         tokens = f"{input_tokens}/{output_tokens}"
 
@@ -112,12 +116,7 @@ def collect_and_build_report_html(
     report_contents = {
         "model": target_model,
         "title": f"{target_model} Performance Analysis",
-        "content": {
-            f"{task}": {
-                "charts":report_charts,
-                "key": "ISL / OSL"
-            }
-        },
+        "content": {f"{task}": {"charts": report_charts, "key": "ISL / OSL"}},
         "version": latest_furiosa_version,
     }
     return report_contents
@@ -160,17 +159,17 @@ def save_report_html(report_contents: dict[str, Any], manifest_data: list[dict[s
         "The path to the result directory for the benchmark. "
         "We currently support the topology-based result directory."
         "e.g., <benchmark_result_path>/vllm/<hardware_name>_<used_number_of_devices>_<runtime_version>/<tool_name>/<task_name>/<model_name>/*.csv"
-    )
+    ),
 )
 @click.option(
     "--model-list",
     type=str,
     required=True,
-    default = "all",
+    default="all",
     help=(
         "The list of models to be included in the benchmark report (comma-separated list of model names)."
         " If 'all' is specified, all models will be included."
-    )
+    ),
 )
 @click.option(
     "--task-list",
@@ -180,7 +179,7 @@ def save_report_html(report_contents: dict[str, Any], manifest_data: list[dict[s
     help=(
         "The list of tasks to be included in the benchmark report (comma-separated list of task names)."
         " If 'all' is specified, all tasks will be included."
-    )
+    ),
 )
 @click.option(
     "--report-contents",
@@ -190,13 +189,13 @@ def save_report_html(report_contents: dict[str, Any], manifest_data: list[dict[s
     help=(
         "The path of the report contents .yaml file path."
         "If not specified, the report contents will be generated from the benchmark result."
-    )
+    ),
 )
 @click.option(
     "--report-path",
     type=str,
     default="./report",
-    help="The path to the output directory for the benchmark report (.html)"
+    help="The path to the output directory for the benchmark report (.html)",
 )
 def report(
     benchmark_result_path: str,
@@ -205,12 +204,11 @@ def report(
     report_contents: str,
     report_path: str,
 ) -> None:
-
     if model_list == "all":
         model_list = list(collect_all_models(benchmark_result_path))
     else:
         model_list = model_list.split(",")
-    
+
     if task_list == "all":
         task_list = list(collect_all_tasks(benchmark_result_path))
     else:
@@ -231,21 +229,15 @@ def report(
             if len(raw_data_files) == 0:
                 print(f"No summary.csv file found for {model} in {benchmark_result_path}")
                 continue
-            
-            items.append(
-                collect_and_build_report_html(
-                    raw_data_files,
-                    model, 
-                    task
-                )
-            )
 
-            csv_bundle = [] 
+            items.append(collect_and_build_report_html(raw_data_files, model, task))
+
+            csv_bundle = []
             for raw_data_file in raw_data_files:
                 new_file_name = f"{model}_{raw_data_file.parents[3].name}_{task}.csv"
                 shutil.copy(raw_data_file, f"{out_dir / 'csv'}/{new_file_name}")
                 csv_bundle.append(f"{out_dir / 'csv'}/{new_file_name}")
-            
+
             zip_file_name = f"{out_dir}/csv/{model}_{task}.zip"
             with ZipFile(zip_file_name, "w", compression=ZIP_DEFLATED) as zf:
                 for path in csv_bundle:

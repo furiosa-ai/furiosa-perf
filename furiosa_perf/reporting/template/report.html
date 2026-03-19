@@ -19,7 +19,7 @@
         </div>
 
         <div class="controls sidebar-controls">
-          <div class="field"> 
+          <div class="field">
             <label for="model-select" class="field-label"><p>&nbsp;&nbsp;Model Type</p></label>
             <div class="select-wrapper">
               <select id="model-select">
@@ -30,7 +30,7 @@
               <span class="select-arrow">▼</span>
             </div>
           </div>
-        
+
           <div class="field">
             <label for="task-select" class="field-label"><p>&nbsp;&nbsp;Task</p></label>
             <div class="select-wrapper">
@@ -122,7 +122,7 @@
                       <div class="rack-power-inputs" data-model="{{ item.model }}" data-tokens="{{ oc.tokens }}">
                         <div class="field" style="color: #ffffff;">
                           <div class="panel-title">Insert values below to<br/>further explore</div>
-  
+
                           <div id="power-inputs-{{ item.model }}-{{ oc.tokens }}" class="power-inputs">
                             {% for d in oc.rack_inputs %}
                             <div class="power-row">

@@ -15,16 +15,15 @@ from furiosa_perf.reporting.theme import (
 
 
 def add_legend_panel(fig, num_devices, x0, x1=1.2, pad_px=0):
-
     font_size = 14
-    itemheight = (font_size + 6)  # 대충 추정치
+    itemheight = font_size + 6  # 대충 추정치
 
     height = fig.layout.height or 600
     margin = fig.layout.margin
     mt = margin.t if margin and margin.t is not None else 80
     mb = margin.b if margin and margin.b is not None else 80
     plot_h = max(1, height - mt - mb)
-    legend_h_px = num_devices * itemheight + pad_px*2
+    legend_h_px = num_devices * itemheight + pad_px * 2
     legend_h_paper = legend_h_px / (plot_h // 2)
     y1 = 1.03
 
@@ -32,15 +31,19 @@ def add_legend_panel(fig, num_devices, x0, x1=1.2, pad_px=0):
 
     fig.add_shape(
         type="rect",
-        xref="paper", yref="paper",
-        x0=x0, x1=x1,
-        y0=y0, y1=y1,
+        xref="paper",
+        yref="paper",
+        x0=x0,
+        x1=x1,
+        y0=y0,
+        y1=y1,
         fillcolor="rgba(20,20,20,0.65)",
         line=dict(color="rgba(255,255,255,0.15)", width=1),
         layer="below",
         name="legend_panel",
     )
     return fig
+
 
 def plot_table_chart(df: pd.DataFrame, columns: list[str]) -> go.Figure:
     table_chart_theme = TableChartSettings()
@@ -187,15 +190,13 @@ def plot_interactive_user_chart(
     interactive_chart_theme = InteractiveChartSettings()
     RNGD_IDX = {device: i for i, device in enumerate(sorted(df["device"].unique())) if "RNGD" in device}
     entire_chart = make_subplots(
-        rows=2, cols=2,
-        column_widths=[interactive_chart_theme.column_widths_left,
-                    1.0 - interactive_chart_theme.column_widths_left],
-        row_heights=[interactive_chart_theme.column_height_upper,
-                    1.0 - interactive_chart_theme.column_height_upper],
-        specs=[[{"type": "xy"}, {"type": "xy"}],
-            [{"type": "xy", "colspan": 1}, None]],
+        rows=2,
+        cols=2,
+        column_widths=[interactive_chart_theme.column_widths_left, 1.0 - interactive_chart_theme.column_widths_left],
+        row_heights=[interactive_chart_theme.column_height_upper, 1.0 - interactive_chart_theme.column_height_upper],
+        specs=[[{"type": "xy"}, {"type": "xy"}], [{"type": "xy", "colspan": 1}, None]],
         vertical_spacing=0.15,
-        horizontal_spacing=0.0,   # (FIX) 0.02 -> 0
+        horizontal_spacing=0.0,  # (FIX) 0.02 -> 0
     )
 
     line_chart_fig = plot_line_chart(df, "TPS/User", "TPS(Output)")
@@ -358,8 +359,16 @@ def plot_rack_performance_chart(df: pd.DataFrame) -> go.Figure:
             }
         )
 
-    rack_performance_chart.update_xaxes(gridcolor="rgba(255,255,255,0.15)", ticks="outside", ticklen=5, rangemode="tozero")
-    rack_performance_chart.update_yaxes(gridcolor="rgba(255,255,255,0.15)", ticks="outside", ticklen=5, linecolor="rgba(255,255,255,0.15)", rangemode="tozero")
+    rack_performance_chart.update_xaxes(
+        gridcolor="rgba(255,255,255,0.15)", ticks="outside", ticklen=5, rangemode="tozero"
+    )
+    rack_performance_chart.update_yaxes(
+        gridcolor="rgba(255,255,255,0.15)",
+        ticks="outside",
+        ticklen=5,
+        linecolor="rgba(255,255,255,0.15)",
+        rangemode="tozero",
+    )
 
     rack_performance_chart.update_layout(
         xaxis_title="Power Capacity of Rack (kw)",
@@ -388,11 +397,12 @@ def plot_rack_performance_chart(df: pd.DataFrame) -> go.Figure:
     )
     return rack_performance_chart
 
+
 def plot_ttft_or_tpot_chart(df: pd.DataFrame, target_metric: str) -> go.Figure:
     entire_chart = make_subplots(
-        rows=1, cols=2,
+        rows=1,
+        cols=2,
         column_widths=[0.5, 0.5],
-
         specs=[[{"type": "xy"}, {"type": "xy"}]],
         vertical_spacing=0.15,
     )
@@ -419,7 +429,12 @@ def plot_ttft_or_tpot_chart(df: pd.DataFrame, target_metric: str) -> go.Figure:
         ticklen=5,
     )
     entire_chart.update_xaxes(
-        title_text="Concurrent", row=1, col=1, ticks="outside", ticklen=5, rangemode="tozero",
+        title_text="Concurrent",
+        row=1,
+        col=1,
+        ticks="outside",
+        ticklen=5,
+        rangemode="tozero",
     )
     entire_chart.update_yaxes(
         title_text=f"P99 {target_metric.upper()}({metric})",
@@ -432,7 +447,12 @@ def plot_ttft_or_tpot_chart(df: pd.DataFrame, target_metric: str) -> go.Figure:
         ticklen=5,
     )
     entire_chart.update_xaxes(
-        title_text="Concurrent", row=1, col=2, ticks="outside", ticklen=5, rangemode="tozero",
+        title_text="Concurrent",
+        row=1,
+        col=2,
+        ticks="outside",
+        ticklen=5,
+        rangemode="tozero",
     )
 
     entire_chart.update_layout(

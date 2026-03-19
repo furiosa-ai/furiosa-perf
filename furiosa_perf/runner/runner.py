@@ -1,5 +1,6 @@
 import yaml
 import requests
+import signal
 import multiprocessing
 
 from pathlib import Path
@@ -15,8 +16,11 @@ from furiosa_perf.configs.settings import (
 from furiosa_perf.benchmark.vllm import VllmPerformanceBenchmark
 from furiosa_perf.runner.monitor import HardwareMonitor
 
+
 class BenchmarkRunner:
-    def __init__(self, system_info: dict[str, Any], hardware_type: str, debug: bool = False, log_all: bool = False) -> None:
+    def __init__(
+        self, system_info: dict[str, Any], hardware_type: str, debug: bool = False, log_all: bool = False
+    ) -> None:
         self.debug = debug
         self.log_all = log_all
         self.hardware_type = hardware_type
@@ -54,9 +58,13 @@ class BenchmarkRunner:
         logger.info(f"Loaded benchmark config: {self.benchmark_config}")
 
     def execute(self, model: str, full: bool, dev: bool) -> list[Any]:
+        monitoring_proc = None
+        api_server = None
+        benchmark = None
+
         try:
             api_server = APIServerManager(
-                model = model,
+                model=model,
                 config=self.api_server_config,
             )
             logger.info(f"Starting server for {model}")
@@ -76,8 +84,8 @@ class BenchmarkRunner:
             self.benchmark_config.device_name = self.system_info.hardware[self.hardware_type]["name"]
             self.benchmark_config.used_device_num = len(self.api_server_config.devices.split(","))
             benchmark = VllmPerformanceBenchmark(
-                config=self.benchmark_config, 
-                backend=self.system_info.runtime, 
+                config=self.benchmark_config,
+                backend=self.system_info.runtime,
                 dev=dev,
                 host=api_server.config.host,
                 port=api_server.config.port,
@@ -85,32 +93,57 @@ class BenchmarkRunner:
             benchmark.setup()
 
             stop_monitor_event = multiprocessing.Event()
-            if api_server.server_process is not None:
-                server_pid = api_server.server_process.pid
-            else:
-                server_pid = -1
-
             monitoring_proc = HardwareMonitor.start_monitor(
                 api_server.config.host,
                 api_server.config.port,
-                server_pid,
+                api_server.server_pid,
                 benchmark.device_name,
                 benchmark.used_device_num,
                 benchmark.base_dir,
                 stop_monitor_event,
             )
             benchmark.run()
-        
-        except RuntimeError as e:
-            raise RuntimeError(f"Benchmark failed: {e}")
-        finally:
-            # server stop
-            if monitoring_proc is not None:
-                stop_monitor_event.set()
-                monitoring_proc.join()
-            
-            if api_server is not None:
-                api_server.stop()
 
-            if benchmark is not None:
-                benchmark.finish_info(full, desc)
+        except Exception:
+            logger.exception("Benchmark execution failed")
+            raise
+        finally:
+            old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+            try:
+                if benchmark is not None:
+                    try:
+                        benchmark.stop()
+                    except Exception:
+                        logger.exception("Failed to stop benchmark")
+
+                if monitoring_proc is not None and stop_monitor_event is not None:
+                    try:
+                        stop_monitor_event.set()
+                        monitoring_proc.join(timeout=5)
+
+                        if monitoring_proc.is_alive():
+                            logger.warning("Monitoring process did not stop gracefully; terminating")
+                            monitoring_proc.terminate()
+                            monitoring_proc.join(timeout=2)
+
+                        if monitoring_proc.is_alive():
+                            logger.warning("Monitoring process still alive; killing")
+                            monitoring_proc.kill()
+                            monitoring_proc.join(timeout=2)
+                    except Exception:
+                        logger.exception("Failed to stop monitoring process")
+
+                if api_server is not None:
+                    try:
+                        api_server.stop()
+                    except Exception:
+                        logger.exception("Failed to stop API server")
+
+                if benchmark is not None:
+                    try:
+                        benchmark.finish_info(full, desc)
+                    except Exception:
+                        logger.exception("Failed to finalize benchmark info")
+
+            finally:
+                signal.signal(signal.SIGINT, old_sigint)
