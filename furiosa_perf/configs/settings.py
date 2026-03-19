@@ -20,6 +20,14 @@ class VllmServerConfig(APIServerConfig):
     no_enable_prefix_caching: bool | None = True
 
     def __post_init__(self) -> None:
+        # Normalize devices to string: YAML may parse "0" as int, or provide list
+        if self.devices is not None:
+            if isinstance(self.devices, int):
+                self.devices = str(self.devices)
+            elif isinstance(self.devices, list):
+                self.devices = ",".join(map(str, self.devices))
+            # Already str, keep as is
+
         if self.tensor_parallel_size is None:
             if self.devices is not None:
                 self.tensor_parallel_size = len(self.devices.split(","))
@@ -50,6 +58,14 @@ class FuriosaLLMServerConfig(APIServerConfig):
     prefix_cache_lookahead_requests: int | None = None
 
     def __post_init__(self) -> None:
+        # Normalize devices to string: YAML may parse "0" as int, or provide list
+        if self.devices is not None:
+            if isinstance(self.devices, int):
+                self.devices = str(self.devices)
+            elif isinstance(self.devices, list):
+                self.devices = ",".join(map(str, self.devices))
+            # Already str, keep as is
+
         # case 1 -> tp is None, devices is None
         if self.tensor_parallel_size is None:
             if self.devices is not None:
