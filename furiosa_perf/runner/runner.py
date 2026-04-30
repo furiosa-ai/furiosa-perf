@@ -1,4 +1,9 @@
+<<<<<<< HEAD
 import signal
+=======
+import yaml
+import requests
+>>>>>>> parent of d93f65f (update)
 import multiprocessing
 
 import yaml
@@ -15,12 +20,15 @@ from furiosa_perf.configs.settings import (
 from furiosa_perf.benchmark.vllm import VllmPerformanceBenchmark
 from furiosa_perf.runner.monitor import HardwareMonitor
 
-
 class BenchmarkRunner:
+<<<<<<< HEAD
     def __init__(
         self, system_info: dict[str, Any], hardware_type: str, save_api_log: bool = False, debug: bool = False, log_all: bool = False
     ) -> None:
         self.save_api_log = save_api_log
+=======
+    def __init__(self, system_info: dict[str, Any], hardware_type: str, debug: bool = False, log_all: bool = False) -> None:
+>>>>>>> parent of d93f65f (update)
         self.debug = debug
         self.log_all = log_all
         self.hardware_type = hardware_type
@@ -56,12 +64,16 @@ class BenchmarkRunner:
         logger.info(f"Loaded benchmark config: {self.benchmark_config}")
 
     def execute(self, model: str, full: bool, dev: bool) -> list[Any]:
-        monitoring_proc = None
-        api_server = None
-        benchmark = None
-
         try:
+<<<<<<< HEAD
             api_server = APIServerManager(model=model, config=self.api_server_config, save_api_log=self.save_api_log)
+=======
+            api_server = APIServerManager(
+                model = model,
+                config=self.api_server_config,
+            )
+            logger.info(f"Starting server for {model}")
+>>>>>>> parent of d93f65f (update)
             server_command = api_server.start()
             desc = (
                 f"* Ubuntu Version: {self.system_info.os}\n"
@@ -75,8 +87,8 @@ class BenchmarkRunner:
             self.benchmark_config.device_name = self.system_info.hardware[self.hardware_type]["name"]
             self.benchmark_config.used_device_num = len(self.api_server_config.devices.split(","))
             benchmark = VllmPerformanceBenchmark(
-                config=self.benchmark_config,
-                backend=self.system_info.runtime,
+                config=self.benchmark_config, 
+                backend=self.system_info.runtime, 
                 dev=dev,
                 host=api_server.config.host,
                 port=api_server.config.port,
@@ -85,6 +97,11 @@ class BenchmarkRunner:
 
             server_pid = api_server.server_proc.pid if api_server.server_proc else -1
             stop_monitor_event = multiprocessing.Event()
+            if api_server.server_process is not None:
+                server_pid = api_server.server_process.pid
+            else:
+                server_pid = -1
+
             monitoring_proc = HardwareMonitor.start_monitor(
                 api_server.config.host,
                 api_server.config.port,
@@ -95,11 +112,11 @@ class BenchmarkRunner:
                 stop_monitor_event,
             )
             benchmark.run()
-
-        except Exception:
-            logger.exception("Benchmark execution failed")
-            raise
+        
+        except RuntimeError as e:
+            raise RuntimeError(f"Benchmark failed: {e}")
         finally:
+<<<<<<< HEAD
             # Ignore SIGINT during cleanup so Ctrl-C doesn't leave orphaned processes
             old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
             try:
@@ -140,3 +157,15 @@ class BenchmarkRunner:
 
             finally:
                 signal.signal(signal.SIGINT, old_sigint)
+=======
+            # server stop
+            if monitoring_proc is not None:
+                stop_monitor_event.set()
+                monitoring_proc.join()
+            
+            if api_server is not None:
+                api_server.stop()
+
+            if benchmark is not None:
+                benchmark.finish_info(full, desc)
+>>>>>>> parent of d93f65f (update)

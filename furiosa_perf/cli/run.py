@@ -5,14 +5,13 @@ from furiosa_perf.runner.runner import BenchmarkRunner
 from furiosa_perf.utils.logger import logger, setup_logger
 from furiosa_perf.utils.collect_env import SystemDetector
 
-
 @click.command()
 @click.option(
     "--model",
     type=str,
     default="LGAI-EXAONE/EXAONE-4.0-32B-FP8",
     show_default=True,
-    help=("MODEL Local path to model directory, or Hugging Face model id (e.g., LGAI-EXAONE/EXAONE-4.0-32B-FP8)."),
+    help=("MODEL Local path to model directory, or Hugging Face model id (e.g., LGAI-EXAONE/EXAONE-4.0-32B-FP8).")
 )
 @click.option(
     "--hardware-type",
@@ -64,9 +63,7 @@ from furiosa_perf.utils.collect_env import SystemDetector
     default=False,
     help="Use furiosa-custom vllm benchmark tools instead of official vllm tools (default: False).",
 )
-def run(
-    model: str, hardware_type: str, backend: str, server_config: Path, benchmark_config: Path, full: bool, dev: bool
-) -> None:
+def run(model: str, hardware_type: str, backend: str, server_config: Path, benchmark_config: Path, full: bool, dev: bool) -> None:
     setup_logger("INFO")
     logger.info("Starting FURIOSA-BENCH")
     logger.info(f"Model: {model}")

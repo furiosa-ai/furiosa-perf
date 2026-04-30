@@ -14,17 +14,26 @@ repos:
         args: ["--line-length=120"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.0
+    rev: v0.11.7
     hooks:
       - id: ruff
         name: ruff-lint
         args:
           [
-            "--select=E,F,W,I,UP,B,SIM,C4,S,NPY,PTH",
-            "--line-length=120",
-            "--ignore=S101,S311,S603,S607,S602,S104,S310",
+            "--fix",
+            "--select=E,F,W,I",
+            "--exit-non-zero-on-fix"
           ]
         language_version: python3.10
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.5.1
+    hooks:
+      - id: mypy
+        language_version: python3.10
+        args: ["--config-file=pyproject.toml"]
+        additional_dependencies:
+          - types-requests
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0
@@ -41,24 +50,18 @@ repos:
         name: pydoclint
         entry: pydoclint
         language: python
-        language_version: python3.10
-        args: ["--style", "google"]
+        args: ["--style", "google", "furiosa_bench"]
         additional_dependencies: [pydoclint]
         types: [python]
       - id: signoff-commit
         name: Sign-off Commit
         entry: bash
-        language: system
-        stages: [commit-msg]
         args:
           - -c
           - |
-            COMMIT_MSG="$(git rev-parse --git-path COMMIT_EDITMSG)"
-            NAME="$(git config user.name)"
-            EMAIL="$(git config user.email)"
-            SIGNOFF="Signed-off-by: $NAME <$EMAIL>"
-
-            if ! grep -q "^$SIGNOFF" "$COMMIT_MSG"; then
-              printf "\n$SIGNOFF\n" >> "$COMMIT_MSG"
+            if ! grep -q "^Signed-off-by: $(git config user.name) <$(git config user.email)>" "$(git rev-parse --git-path COMMIT_EDITMSG)"; then
+              printf "\nSigned-off-by: $(git config user.name) <$(git config user.email)>\n" >> "$(git rev-parse --git-path COMMIT_EDITMSG)"
             fi
+        language: system
         verbose: true
+        stages: [commit-msg]

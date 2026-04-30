@@ -5,7 +5,6 @@ import time
 from dataclasses import asdict
 
 import requests
-import psutil
 
 from furiosa_perf.configs.settings import APIServerConfig, FuriosaLLMServerConfig, VllmServerConfig
 from furiosa_perf.utils.logger import logger
@@ -21,12 +20,17 @@ class APIServerManager:
         self.model = model
         self.config = config
         self.server_process: subprocess.Popen[str] | None = None
+<<<<<<< HEAD
         self.server_proc: psutil.Process | None = None
         self.log_output = "api_server.log" if save_api_log else subprocess.DEVNULL
+=======
+        self.server_ready = False
+>>>>>>> parent of d93f65f (update)
 
     def __del__(self) -> None:
         self.stop()
 
+<<<<<<< HEAD
     def start(self) -> str:
         if self._is_api_server_ready():
             logger.warning(f"API server already running for model: {self.model}")
@@ -36,6 +40,16 @@ class APIServerManager:
         if self.server_process and self.server_process.poll() is None:
             logger.warning("Server process already running but not yet ready")
             return ""
+=======
+    def start(self) -> None:
+        if self._is_api_server_ready(self.model):
+            logger.warning(f"API server is already running for model: {self.model}")
+            return
+
+        if self.server_process and self.server_process.poll() is None:
+            logger.warning("Server already running")
+            return
+>>>>>>> parent of d93f65f (update)
 
         command, env = self._build_command()
         if not command:
@@ -52,8 +66,13 @@ class APIServerManager:
             start_new_session=True,
         )
 
+<<<<<<< HEAD
         self._wait_for_startup()
         self.server_proc = psutil.Process(self.server_process.pid)
+=======
+        self._wait_for_startup(url=f"http://{self.config.host}:{self.config.port}/v1/models")
+        self.server_ready = True
+>>>>>>> parent of d93f65f (update)
         logger.info("Server is ready")
         return " ".join(command)
 
@@ -145,6 +164,7 @@ class APIServerManager:
 
             logger.info("Waiting for server launch. Check after 30 seconds")
             time.sleep(30)
+<<<<<<< HEAD
 
     def _find_process_by_port(self, port: int) -> psutil.Process | None:
         for conn in psutil.net_connections(kind="inet"):
@@ -154,3 +174,5 @@ class APIServerManager:
                 except psutil.NoSuchProcess:
                     return None
         return None
+=======
+>>>>>>> parent of d93f65f (update)

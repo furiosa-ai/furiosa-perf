@@ -48,7 +48,9 @@ class HardwareMonitorData:
     def __str__(self) -> str:
         """Serialize as one CSV line (including a trailing newline)."""
         self.avg_utilization = (
-            round(self.avg_utilization / self.used_device_num, 2) if self.used_device_num > 0 else 0.0
+            round(self.avg_utilization / self.used_device_num, 2)
+            if self.used_device_num > 0
+            else 0.0
         )
         self.power_consumption = round(self.power_consumption, 2)
         self.peak_temperature = round(self.peak_temperature, 2)
@@ -154,7 +156,10 @@ class HardwareMonitor:
         try:
             import furiosa_smi_py
         except ImportError:
-            logger.warning("furiosa_smi_py is not installed. " "Please install it to enable Furiosa NPU monitoring.")
+            logger.warning(
+                "furiosa_smi_py is not installed. "
+                "Please install it to enable Furiosa NPU monitoring."
+            )
             return
 
         furiosa_smi_py.init()
@@ -182,7 +187,10 @@ class HardwareMonitor:
                         utilization = (
                             # Furiosa core utilization is reported per-PE;
                             # divide by 8 to get a device-level average.
-                            sum(pe.pe_usage_percentage() for pe in observer.get_core_utilization(device))
+                            sum(
+                                pe.pe_usage_percentage()
+                                for pe in observer.get_core_utilization(device)
+                            )
                             / 8
                         )
                         temperature = device.device_temperature().soc_peak()
@@ -191,7 +199,7 @@ class HardwareMonitor:
                             data.power_consumption += power_consumption
                             data.peak_temperature = max(data.peak_temperature, temperature)
                             data.avg_utilization += utilization
-
+                
                     metrics_text = HardwareMonitor._fetch_metrics_text(host, port)
                     if metrics_text is None:
                         f.write(str(data))
@@ -208,7 +216,9 @@ class HardwareMonitor:
                             data.num_requests_waiting = float(line.split()[-1])
 
                     if server_pid != -1:
-                        tree_cpu, rss_gib = HardwareMonitor._get_process_tree_usage(parent)
+                        tree_cpu, rss_gib = HardwareMonitor._get_process_tree_usage(
+                            parent
+                        )
                     else:
                         tree_cpu = 0.0
                         rss_gib = 0.0
@@ -248,14 +258,17 @@ class HardwareMonitor:
                         nvidia_smi = subprocess.Popen(
                             [
                                 "nvidia-smi",
-                                "--query-gpu=name,utilization.gpu,power.draw," "temperature.gpu",
+                                "--query-gpu=name,utilization.gpu,power.draw,"
+                                "temperature.gpu",
                                 "--format=csv,noheader,nounits",
                             ],
                             stdout=subprocess.PIPE,
                         )
                         output, _ = nvidia_smi.communicate()
                     except FileNotFoundError:
-                        logger.warning("nvidia-smi not found. Skipping NVIDIA GPU monitoring.")
+                        logger.warning(
+                            "nvidia-smi not found. Skipping NVIDIA GPU monitoring."
+                        )
                         return
 
                     devices_status = output.decode("utf-8").strip().split("\n")
@@ -290,11 +303,13 @@ class HardwareMonitor:
                             data.num_requests_waiting = float(line.split()[-1])
 
                     if server_pid != -1:
-                        tree_cpu, rss_gib = HardwareMonitor._get_process_tree_usage(parent)
+                        tree_cpu, rss_gib = HardwareMonitor._get_process_tree_usage(
+                            parent
+                        )
                     else:
                         tree_cpu = 0.0
                         rss_gib = 0.0
-
+                        
                     data.host_cpu_utils = tree_cpu
                     data.host_memory_usage_gib = rss_gib
 
