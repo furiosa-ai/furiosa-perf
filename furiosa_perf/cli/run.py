@@ -47,6 +47,12 @@ from furiosa_perf.utils.collect_env import SystemDetector
     ),
 )
 @click.option(
+    "--save-api-log",
+    is_flag=True,
+    default=False,
+    help="Save API log to file (default: False).",
+)
+@click.option(
     "--full",
     is_flag=True,
     default=False,
@@ -73,7 +79,7 @@ def run(
         logger.error("Hardware compatibility check failed. Exiting.")
         exit(1)
 
-    runner = BenchmarkRunner(system_info, hardware_type)
+    runner = BenchmarkRunner(system_info, hardware_type, save_api_log)
     runner.api_server_setup(backend, server_config)
     runner.benchmark_config_setup(benchmark_config)
     logger.info("Benchmarking started.")

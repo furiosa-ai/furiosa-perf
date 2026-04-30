@@ -42,6 +42,7 @@ class VllmServerConfig(APIServerConfig):
 
 @dataclass
 class FuriosaLLMServerConfig(APIServerConfig):
+    no_enable_prefix_caching: bool | None = True
     enable_prefix_caching: bool | None = False
     expected_average_seq_length: int | None = None
     max_concurrency: int | None = None

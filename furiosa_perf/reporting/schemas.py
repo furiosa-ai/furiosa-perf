@@ -16,8 +16,8 @@ class BenchmarkMetricLoader:
             H100_vllm_0.13.0_8
         """
         p = Path(summary_csv_path)
-        device, backend, version, num = p.parents[3].name.split("_")
-        return device, backend, version, num
+        a, b, c, d = p.parents[3].name.split("_")
+        return a, b, c, d
 
     @staticmethod
     def load_offline_benchmark_metric(
