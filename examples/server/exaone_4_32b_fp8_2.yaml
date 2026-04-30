@@ -1,0 +1,2 @@
+served_model_name: LGAI-EXAONE/EXAONE-4.0-32B-FP8
+devices: 0,1

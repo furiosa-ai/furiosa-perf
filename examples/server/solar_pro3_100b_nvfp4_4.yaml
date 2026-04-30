@@ -1,0 +1,2 @@
+served_model_name: furiosa-ai-dev/solar-enkoja-100b-128k-3.1.0-dpo.5-nvfp4
+devices: 0,1,2,3

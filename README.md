@@ -34,11 +34,26 @@ sudo apt-get install -y python3-venv
 ### Backend prerequisites
 
 - **Furiosa NPU + `furiosa-llm`**
-  - Install `furiosa-llm`
-  - (Optional, for monitoring) `furiosa_smi_py` available (`furiosa-smi` installed and working)
+```bash
+  # Install furiosa-llm
+  pip install furiosa-llm
+
+  # (Optional, for monitoring) Make sure furiosa_smi_py is available and furiosa-smi is installed and working
+  sudo apt-get install -y furiosa-smi
+```
 - **NVIDIA GPU + vLLM**
-  - Install `vllm`
-  - (Optional, for monitoring) `nvidia-smi` available
+```bash
+  # Install vllm
+  pip install vllm
+
+  # (Optional, for monitoring) Make sure nvidia-smi is available
+
+  # Install deepgemm
+  git clone --recursive https://github.com/deepseek-ai/DeepGEMM.git
+  cd DeepGEMM
+  pip install torch wheel
+  pip install --no-build-isolation -e .
+```
 
 ### Install `furiosa-perf`
 

@@ -3,6 +3,7 @@ import signal
 import subprocess
 import time
 from dataclasses import asdict
+from pathlib import Path
 
 import requests
 import psutil
@@ -22,6 +23,8 @@ class APIServerManager:
         self.server_process: subprocess.Popen[str] | None = None
         self.server_ready = False
         self.server_pid = -1
+        self._log_file = None
+        self._log_path: Path | None = None
 
     def __del__(self) -> None:
         self.stop()
@@ -43,11 +46,19 @@ class APIServerManager:
 
         logger.info(f" Starting server: {' '.join(command)}")
 
+        log_dir = Path("./serve_logs")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        safe_model_name = self.model.replace("/", "_")
+        self._log_path = log_dir / f"serve_{safe_model_name}_{int(time.time())}.log"
+        logger.info(f"Server log: {self._log_path}")
+        self._log_file = open(self._log_path, "w", buffering=1)
+
+        env["PYTHONUNBUFFERED"] = "1"
         self.server_process = subprocess.Popen(
             command,
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=self._log_file,
+            stderr=self._log_file,
             text=True,
             start_new_session=True,
         )
@@ -78,6 +89,9 @@ class APIServerManager:
 
         self.server_process = None
         self.server_ready = False
+        if self._log_file:
+            self._log_file.close()
+            self._log_file = None
 
     def _to_kebab_case(self, s: str) -> str:
         return s.replace("_", "-")
@@ -157,7 +171,18 @@ class APIServerManager:
 
     def _wait_for_startup(self, url: str = "http://localhost:8000/v1/models", timeout: int = 600) -> None:
         start = time.time()
+        log_pos = 0
         while True:
+            if self._log_path and self._log_path.exists():
+                with open(self._log_path) as f:
+                    f.seek(log_pos)
+                    for line in f:
+                        logger.info(f"[server] {line.rstrip()}")
+                    log_pos = f.tell()
+
+            if self.server_process and self.server_process.poll() is not None:
+                raise RuntimeError(f"Server process exited unexpectedly (code {self.server_process.poll()}). See {self._log_path}")
+
             try:
                 resp = requests.get(url, timeout=5)
                 if resp.status_code == 200:
@@ -167,7 +192,7 @@ class APIServerManager:
                 logger.debug(f"Server not ready yet: {e}")
 
             if time.time() - start > timeout:
-                raise RuntimeError(f"Time: server did not start within {timeout} seconds")
+                raise RuntimeError(f"Server did not start within {timeout} seconds. See {self._log_path}")
 
             logger.info("Waiting for server launch. Check after 30 seconds")
             time.sleep(30)

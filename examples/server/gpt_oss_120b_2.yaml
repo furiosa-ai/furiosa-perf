@@ -1,0 +1,2 @@
+served_model_name: openai/gpt-oss-120b
+devices: 0,1
