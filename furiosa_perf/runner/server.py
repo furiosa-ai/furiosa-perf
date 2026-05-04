@@ -169,7 +169,7 @@ class APIServerManager:
         except (requests.RequestException, KeyError, IndexError, ValueError):
             return False
 
-    def _wait_for_startup(self, url: str = "http://localhost:8000/v1/models", timeout: int = 600) -> None:
+    def _wait_for_startup(self, url: str = "http://localhost:8000/v1/models", timeout: int = 1800) -> None:
         start = time.time()
         log_pos = 0
         while True:

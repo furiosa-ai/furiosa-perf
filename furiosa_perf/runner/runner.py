@@ -1,5 +1,6 @@
 import yaml
 import requests
+import os
 import signal
 import multiprocessing
 
@@ -89,6 +90,7 @@ class BenchmarkRunner:
                 dev=dev,
                 host=api_server.config.host,
                 port=api_server.config.port,
+                env=os.environ.copy(),
             )
             benchmark.setup()
 

@@ -9,7 +9,7 @@ scenarios:
     max_concurrency: [1, 4, 8, 16, 32, 64, 128, 256, 512]
   - input_tokens: 1024
     output_tokens: 1024
-    max_concurrency: [1, 4, 8, 16, 32, 64, 128, 256]
+    max_concurrency: [1, 4, 8, 16, 32, 64, 128, 256, 512]
   - input_tokens: 2048
     output_tokens: 1024
     max_concurrency: [1, 4, 8, 16, 32, 64, 128, 256]
@@ -18,7 +18,7 @@ scenarios:
     max_concurrency: [1, 4, 8, 16, 32, 64]
   - input_tokens: 15360
     output_tokens: 1024
-    max_concurrency: [1, 4, 8, 16, 32]
+    max_concurrency: [1, 4, 8, 16, 32, 64]
   - input_tokens: 31744
     output_tokens: 1024
     max_concurrency: [1, 4, 8, 16, 32]

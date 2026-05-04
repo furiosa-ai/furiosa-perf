@@ -36,7 +36,7 @@ class VllmPerformanceBenchmark:
             "REPO_NAME": "official-vllm",
             "SETUP_COMMANDS": [
                 ("down_benchmark", ["git", "clone", "{REPO_URL}", "-b", "{BRANCH}", "{REPO_NAME}"]),
-                ("install_package", ["{python_exe}", "-m", "pip", "install", "vllm==0.13.0"]),
+                ("install_package", ["{python_exe}", "-m", "pip", "install", "vllm==0.20.1"]),
             ],
         },
     }
@@ -56,6 +56,7 @@ class VllmPerformanceBenchmark:
         "--save-result",
         "--result-dir={result_dir}",
         "--ready-check-timeout-sec=0",
+        "--trust-remote-code",
     ]
     VLLM_COMMANDS: dict[str, list[str]] = {
         "offline": [
@@ -81,6 +82,7 @@ class VllmPerformanceBenchmark:
         host: str | None = None,
         port: int | None = None,
         dev: bool = False,
+        env: dict[str, Any] = {},
     ) -> None:
         self.name = config.name
         self.model = config.model
@@ -94,6 +96,7 @@ class VllmPerformanceBenchmark:
         self.host = host
         self.port = port
         self.bench_process = None
+        self.env = env
 
         self.branch = self.ENV[self.dev]["BRANCH"]
         self.repo_name = self.ENV[self.dev]["REPO_NAME"]
@@ -176,7 +179,7 @@ class VllmPerformanceBenchmark:
         return command
 
     def run(self) -> None:
-        cwd: Path = self.repo_dir.resolve()
+        cwd: Path = self.repo_dir.resolve() if self.dev == "dev" else Path.cwd()
 
         self.total_results = {
             "model": self.model,
@@ -191,6 +194,8 @@ class VllmPerformanceBenchmark:
             logger.info(f"Executing: {' '.join(command)} | cwd: {cwd}")
 
             start_timestamp = datetime.now(timezone.utc).isoformat()
+            env = os.environ.copy()
+            env.update({"HF_TOKEN": self.env["HF_TOKEN"]})
             self.bench_process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
@@ -198,7 +203,8 @@ class VllmPerformanceBenchmark:
                 text=True,
                 cwd=cwd,
                 bufsize=1,
-                start_new_session=True
+                start_new_session=True,
+                env=env,
             )
             output_lines = []
             if self.bench_process.stdout is not None:
