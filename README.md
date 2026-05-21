@@ -100,6 +100,7 @@ Options:
 
 - `--full`: save full metrics (including p95/p99) into `summary.*`
 - `--dev`: use Furiosa custom vLLM benchmark tools instead of the official vLLM tools
+- `--save-api-log`: redirect API server stdout/stderr to a timestamped log under `serve_logs/` (suppressed by default)
 
 ---
 
@@ -195,6 +196,7 @@ Approximate structure:
       - `<ISL>.<OSL>.<CONC>/`
         - `*_monitoring_log.csv`
         - `vllm-*.json` (raw vLLM bench outputs)
+- `serve_logs/serve_<MODEL>_<TIMESTAMP>.log` (only when `--save-api-log` is passed): API server stdout/stderr
 
 Example:
 
@@ -208,9 +210,9 @@ This feature aggregates multiple `*.csv` files (benchmark summary files) and ren
 
 ```bash
 furiosa-perf report \
-  --result-path /root/bench_space/vllm \
+  --benchmark-result-path /root/bench_space/vllm \
   --model-list EXAONE-4.0-32B-FP8 \
-  --output-dir /root/furiosa-perf-report \
+  --report-path /root/furiosa-perf-report
 ```
 
 Open:
@@ -225,7 +227,7 @@ Open:
   - NPU: if `furiosa_smi_py` is not available, NPU monitoring is skipped.
   - GPU: if `nvidia-smi` is not available, GPU monitoring is skipped.
 - **Server logs are not visible**
-  - The server process stdout/stderr may be suppressed by default. If the server fails to start, run the backend server command directly to inspect logs.
+  - By default, server stdout/stderr is suppressed. Pass `--save-api-log` to capture them under `serve_logs/`. Alternatively, run the backend command directly to inspect startup errors.
 
 ---
 

@@ -1,27 +1,33 @@
-import yaml
-import requests
+import multiprocessing
 import os
 import signal
-import multiprocessing
-
 from pathlib import Path
 from typing import Any
-from furiosa_perf.runner.server import APIServerManager
-from furiosa_perf.utils.logger import logger
+
+import yaml
+
+from furiosa_perf.benchmark.vllm import VllmPerformanceBenchmark
 from furiosa_perf.configs.settings import (
     APIServerConfig,
     APIServerConfigLoader,
     PerformanceBenchConfig,
     PerformanceBenchConfigLoader,
 )
-from furiosa_perf.benchmark.vllm import VllmPerformanceBenchmark
 from furiosa_perf.runner.monitor import HardwareMonitor
+from furiosa_perf.runner.server import APIServerManager
+from furiosa_perf.utils.logger import logger
 
 
 class BenchmarkRunner:
     def __init__(
-        self, system_info: dict[str, Any], hardware_type: str, debug: bool = False, log_all: bool = False
+        self,
+        system_info: dict[str, Any],
+        hardware_type: str,
+        save_api_log: bool = False,
+        debug: bool = False,
+        log_all: bool = False,
     ) -> None:
+        self.save_api_log = save_api_log
         self.debug = debug
         self.log_all = log_all
         self.hardware_type = hardware_type
@@ -33,10 +39,9 @@ class BenchmarkRunner:
 
     def api_server_setup(self, backend: str, api_server_config_path: Path) -> None:
         if not api_server_config_path.exists():
-            logger.error(f"Configuration file not found: {api_server_config_path}")
             raise FileNotFoundError(f"Configuration file not found: {api_server_config_path}")
 
-        with open(api_server_config_path, mode="r") as file:
+        with api_server_config_path.open() as file:
             api_server_config_data = yaml.safe_load(file)
 
         self.api_server_config = APIServerConfigLoader.create_config(
@@ -47,10 +52,9 @@ class BenchmarkRunner:
 
     def benchmark_config_setup(self, benchmark_config_path: Path) -> None:
         if not Path(benchmark_config_path).exists():
-            logger.error(f"Configuration file not found: {benchmark_config_path}")
             raise FileNotFoundError(f"Configuration file not found: {benchmark_config_path}")
 
-        with open(benchmark_config_path, mode="r") as file:
+        with benchmark_config_path.open() as file:
             benchmark_config_data = yaml.safe_load(file)
 
         self.benchmark_config = PerformanceBenchConfigLoader.create_config(
@@ -60,14 +64,13 @@ class BenchmarkRunner:
 
     def execute(self, model: str, full: bool, dev: bool) -> list[Any]:
         monitoring_proc = None
+        stop_monitor_event = None
         api_server = None
         benchmark = None
+        desc = ""
 
         try:
-            api_server = APIServerManager(
-                model=model,
-                config=self.api_server_config,
-            )
+            api_server = APIServerManager(model=model, config=self.api_server_config, save_api_log=self.save_api_log)
             logger.info(f"Starting server for {model}")
             server_command = api_server.start()
             desc = (
@@ -77,11 +80,7 @@ class BenchmarkRunner:
                 f"* API Server Command: {server_command}"
             )
 
-            resp = requests.get(f"http://{api_server.config.host}:{api_server.config.port}/v1/models")
-            resp.raise_for_status()
-            pretrained_id = resp.json()["data"][0]["id"]
-
-            self.benchmark_config.model = pretrained_id
+            self.benchmark_config.model = api_server.model
             self.benchmark_config.device_name = self.system_info.hardware[self.hardware_type]["name"]
             self.benchmark_config.used_device_num = len(self.api_server_config.devices.split(","))
             benchmark = VllmPerformanceBenchmark(
@@ -149,3 +148,5 @@ class BenchmarkRunner:
 
             finally:
                 signal.signal(signal.SIGINT, old_sigint)
+
+        return self.results

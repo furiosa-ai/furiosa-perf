@@ -3,7 +3,6 @@ from typing import Any, TypeAlias
 
 from furiosa_perf.utils.logger import logger
 
-
 @dataclass
 class APIServerConfig:
     host: str = "0.0.0.0"
@@ -13,7 +12,6 @@ class APIServerConfig:
     data_parallel_size: int = 1
     devices: str | None = None  # comma separated list of deviceps IDs
     served_model_name: str | None = None
-
 
 @dataclass
 class VllmServerConfig(APIServerConfig):
@@ -42,6 +40,7 @@ class VllmServerConfig(APIServerConfig):
 
 @dataclass
 class FuriosaLLMServerConfig(APIServerConfig):
+    no_enable_prefix_caching: bool | None = True
     enable_prefix_caching: bool | None = False
     expected_average_seq_length: int | None = None
     max_concurrency: int | None = None
@@ -50,7 +49,7 @@ class FuriosaLLMServerConfig(APIServerConfig):
     prefix_cache_lookahead_requests: int | None = None
 
     def __post_init__(self) -> None:
-        # case 1 -> tp is None, devices is None
+        # case 1 -> tp is None, devices is None       
         if self.tensor_parallel_size is None:
             if self.devices is not None:
                 self.tensor_parallel_size = len(self.devices.split(","))
@@ -95,7 +94,6 @@ class LLMScenarioConfig:
         if self.num_prompts is None:
             self.num_prompts = self.max_concurrency * 3
 
-
 @dataclass
 class ShareGPTConfig:
     input_tokens: int = 1024
@@ -128,9 +126,12 @@ class EmbeddingScenarioConfig:
 
 
 ScenarioConfig: TypeAlias = (
-    LLMScenarioConfig | RerankerScenarioConfig | PrefixCacheScenarioConfig | EmbeddingScenarioConfig | ShareGPTConfig
+    LLMScenarioConfig | 
+    RerankerScenarioConfig | 
+    PrefixCacheScenarioConfig | 
+    EmbeddingScenarioConfig |
+    ShareGPTConfig
 )
-
 
 @dataclass
 class PerformanceBenchConfig:
@@ -140,7 +141,6 @@ class PerformanceBenchConfig:
     device_name: str = ""
     used_device_num: int = 1
     scenarios: list[ScenarioConfig] = field(default_factory=list)
-
 
 class PerformanceBenchConfigLoader:
     CONFIG_REGISTRY: dict[str, type[ScenarioConfig]] = {
@@ -163,12 +163,9 @@ class PerformanceBenchConfigLoader:
         for scenario in configs.get("scenarios", []):
             if isinstance(scenario["max_concurrency"], list):
                 scenario_base = {k: v for k, v in scenario.items() if k != "max_concurrency"}
-                expanded_scenarios.extend(
-                    [
-                        scenario_class(**scenario_base, max_concurrency=max_concurrency)
-                        for max_concurrency in scenario["max_concurrency"]
-                    ]
-                )
+                expanded_scenarios.extend([
+                    scenario_class(**scenario_base, max_concurrency=max_concurrency) for max_concurrency in scenario["max_concurrency"]
+                ])
             else:
                 expanded_scenarios.append(scenario_class(**scenario))
         return PerformanceBenchConfig(**base, scenarios=expanded_scenarios)

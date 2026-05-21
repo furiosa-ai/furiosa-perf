@@ -1,9 +1,10 @@
+from pathlib import Path
+
 import click
 
-from pathlib import Path
 from furiosa_perf.runner.runner import BenchmarkRunner
-from furiosa_perf.utils.logger import logger, setup_logger
 from furiosa_perf.utils.collect_env import SystemDetector
+from furiosa_perf.utils.logger import logger, setup_logger
 
 
 @click.command()
@@ -12,7 +13,7 @@ from furiosa_perf.utils.collect_env import SystemDetector
     type=str,
     default="LGAI-EXAONE/EXAONE-4.0-32B-FP8",
     show_default=True,
-    help=("MODEL Local path to model directory, or Hugging Face model id (e.g., LGAI-EXAONE/EXAONE-4.0-32B-FP8)."),
+    help=("MODEL Local path to model directory, or Hugging Face model id (e.g., LGAI-EXAONE/EXAONE-4.0-32B-FP8).")
 )
 @click.option(
     "--hardware-type",
@@ -47,6 +48,12 @@ from furiosa_perf.utils.collect_env import SystemDetector
     ),
 )
 @click.option(
+    "--save-api-log",
+    is_flag=True,
+    default=False,
+    help="Save API log to file (default: False).",
+)
+@click.option(
     "--full",
     is_flag=True,
     default=False,
@@ -59,7 +66,14 @@ from furiosa_perf.utils.collect_env import SystemDetector
     help="Use furiosa-custom vllm benchmark tools instead of official vllm tools (default: False).",
 )
 def run(
-    model: str, hardware_type: str, backend: str, server_config: Path, benchmark_config: Path, full: bool, dev: bool
+    model: str,
+    hardware_type: str,
+    backend: str,
+    server_config: Path,
+    benchmark_config: Path,
+    save_api_log: bool,
+    full: bool,
+    dev: bool,
 ) -> None:
     setup_logger("INFO")
     logger.info("Starting FURIOSA-BENCH")
@@ -73,7 +87,7 @@ def run(
         logger.error("Hardware compatibility check failed. Exiting.")
         exit(1)
 
-    runner = BenchmarkRunner(system_info, hardware_type)
+    runner = BenchmarkRunner(system_info, hardware_type, save_api_log)
     runner.api_server_setup(backend, server_config)
     runner.benchmark_config_setup(benchmark_config)
     logger.info("Benchmarking started.")

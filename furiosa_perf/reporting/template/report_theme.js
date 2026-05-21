@@ -24,18 +24,18 @@
       axisLineColor: "rgba(255,255,255,0.30)",
       zeroLineColor: "rgba(255,255,255,0.18)",
       legendBg: "rgba(0,0,0,0)",
-
+    
       hoverBg: "#000000",          // (FIX) 누락되어 undefined 들어가던 것 방지
-
+    
       tableHeaderFill: "#000000",
       tableRowOdd: "#121212",
       tableRowEven: "#000000",     // (FIX) "##000000" 오타
       tableCellLine: "rgba(255,255,255,0.25)",
       tableHeaderLine: "rgba(255,255,255,0.35)",
       tableShapeLine: "rgba(255,255,255,0.35)",
-
+    
       sloLineColor: "#ffffff",
-
+    
       // (optional) 패널 테마용
       panelFill: "rgba(20,20,20,0.65)",
       panelBorder: "rgba(255,255,255,0.15)",
@@ -97,43 +97,43 @@
 
   function getUsedAxisKeys(gd) {
     const used = new Set();
-
+  
     // 기본 축은 항상 사용 가능성 있으니 포함
     used.add("xaxis");
     used.add("yaxis");
-
+  
     (gd.data || []).forEach((tr) => {
       if (!tr || tr.visible === false || tr.visible === "legendonly") return;
-
+  
       // trace.xaxis: 'x', 'x2', 'x3'... / yaxis도 동일
       const xa = tr.xaxis ? `xaxis${String(tr.xaxis).slice(1)}` : "xaxis";
       const ya = tr.yaxis ? `yaxis${String(tr.yaxis).slice(1)}` : "yaxis";
       used.add(xa);
       used.add(ya);
     });
-
+  
     return used;
   }
-
+  
   function themedLayoutUpdate(gd, theme) {
     const layout = gd.layout || {};
-
+  
     const layoutUpdate = {
       paper_bgcolor: theme.paperBg,
       plot_bgcolor: theme.plotBg,
-
+    
       // font도 기존 size/family 유지
       font: {
         ...(layout.font || {}),
         color: theme.fontColor
       },
-
+    
       hoverlabel: {
         ...(layout.hoverlabel || {}),
         bgcolor: theme.hoverBg ?? (layout.hoverlabel?.bgcolor),
         font: { ...(layout.hoverlabel?.font || {}), color: theme.fontColor }
       },
-
+    
       // (FIX 핵심) legend 위치(x,y 등) 보존 + 색만 변경
       legend: {
         ...(layout.legend || {}),
@@ -141,13 +141,13 @@
         font: { ...(layout.legend?.font || {}), color: theme.fontColor }
       }
     };
-
+  
     // 축들만 업데이트: "사용중이면 테마 적용", "미사용이면 숨김"
     Object.keys(layout).forEach((k) => {
       const isXAxis = /^xaxis(\d+)?$/.test(k);
       const isYAxis = /^yaxis(\d+)?$/.test(k);
       if (!isXAxis && !isYAxis) return;
-
+    
       layoutUpdate[k] = {
         ...(layout[k] || {}),
         gridcolor: theme.gridColor,
@@ -157,7 +157,7 @@
         titlefont: { ...((layout[k] || {}).titlefont || {}), color: theme.fontColor }
       };
     });
-
+  
     // annotations/font
     if (Array.isArray(layout.annotations)) {
       layoutUpdate.annotations = layout.annotations.map(a => ({
@@ -165,7 +165,7 @@
         font: { ...(a.font || {}), color: theme.fontColor }
       }));
     }
-
+  
     // shapes/line
     const shapes = Array.isArray(layout.shapes) ? layout.shapes : [];
 
@@ -173,9 +173,9 @@
       const shapeId = s?.name || s?.templateitemname || s?.label?.text || "";
       const isSlo = shapeId === "slo_line";
       const isPanel = shapeId === "legend_panel";
-
+    
       const next = { ...s };
-
+    
       if (next.line) {
         next.line = {
           ...(next.line || {}),
@@ -184,18 +184,18 @@
             : (isPanel ? (theme.panelBorder || next.line.color) : (theme.tableShapeLine || next.line.color))
         };
       }
-
+    
       if (isPanel) {
         // (중요) 패널은 fill을 테마에서 강제
         if (theme.panelFill) next.fillcolor = theme.panelFill;
       }
-
+    
       return next;
     });
 
-
-
-
+    
+      
+  
     return layoutUpdate;
   }
 
@@ -225,26 +225,26 @@
     // 1) TABLE traces
     if (opts.recolorTable) {
       const tableIdxs = getTableTraceIndices(gd);
-
+    
       for (const idx of tableIdxs) {
         const tr = gd.data[idx];
         const values = tr?.cells?.values || [];
         const nCols = values.length;
         const nRows = Array.isArray(values[0]) ? values[0].length : 0;
-
+    
         const rowStripe = Array.from({ length: nRows }, (_, r) =>
           (r % 2 === 0) ? theme.tableRowOdd : theme.tableRowEven
         );
-
+    
         const fill2d = Array.from({ length: nCols }, () => rowStripe);
-
+    
         await Plotly.restyle(
           gd,
           {
             "header.fill.color": [theme.tableHeaderFill],
             "header.font.color": [theme.fontColor],
             "header.line.color": [theme.tableHeaderLine],
-
+    
             // 중요: 2D 배열을 trace 1개에 적용하므로 한 번 더 []로 감쌈
             "cells.fill.color": [fill2d],
             "cells.font.color": [theme.fontColor],
@@ -253,7 +253,7 @@
           [idx]
         );
       }
-
+      
     }
 
     function themedLayoutUpdateSafe(gd, theme) {
@@ -266,25 +266,25 @@
         "legend.font.color": theme.fontColor,
         "hoverlabel.bgcolor": theme.hoverBg,
         "hoverlabel.font.color": theme.fontColor,
-
+    
         // 중요: UI 상태 유지
         "uirevision": "theme-lock",
       };
-
+    
       Object.keys(layout).forEach((k) => {
         if (!/^xaxis(\d+)?$/.test(k) && !/^yaxis(\d+)?$/.test(k)) return;
-
+    
         upd[`${k}.gridcolor`] = theme.gridColor;
         upd[`${k}.zerolinecolor`] = theme.zeroLineColor;
         upd[`${k}.linecolor`] = theme.axisLineColor;
-
+    
         // tick/title은 "색상만" 바꾸기
         upd[`${k}.tickfont.color`] = theme.fontColor;
-
+    
         // 최신 plotly에선 titlefont 대신 title.font 권장
         upd[`${k}.title.font.color`] = theme.fontColor;
       });
-
+    
       return upd;
     }
 

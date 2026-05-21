@@ -247,8 +247,8 @@ p{
 .graph-container{
   width: 100% !important;
 }
-.graph-inner .js-plotly-plot{
-  width: 100%;
+.graph-inner .js-plotly-plot{ 
+  width: 100%; 
   margin: 10px 0;
 }
 

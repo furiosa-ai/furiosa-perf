@@ -16,8 +16,8 @@ class BenchmarkMetricLoader:
             H100_vllm_0.13.0_8
         """
         p = Path(summary_csv_path)
-        device, backend, version, num = p.parents[3].name.split("_")
-        return device, backend, version, num
+        a, b, c, d = p.parents[3].name.split("_")
+        return a, b, c, d
 
     @staticmethod
     def load_offline_benchmark_metric(
@@ -32,7 +32,7 @@ class BenchmarkMetricLoader:
         )
 
         def col(name: str, default: float = 0.0) -> pd.Series:
-            """If the DataFrame contains 'name', return a numeric Series.
+            """If the DataFrame contains 'name', return a numeric Series. 
             Otherwise, return a Series filled with the default value."""
             if name in df.columns:
                 return pd.to_numeric(df[name], errors="coerce").fillna(default)
@@ -63,7 +63,6 @@ class BenchmarkMetricLoader:
         )
         return new_df
 
-
 class HyperbolicModel:
     @staticmethod
     def fit_hyperbolic_model(
@@ -77,15 +76,7 @@ class HyperbolicModel:
             return x / (y + z)
 
         try:
-            popt, _ = curve_fit(
-                hyperbolic_ctp,
-                x,
-                y,
-                p0=[a_init, b_init],
-                maxfev=5000,
-                sigma=np.ones_like(y) * 0.01,
-                absolute_sigma=True,
-            )
+            popt, _ = curve_fit(hyperbolic_ctp, x, y, p0=[a_init, b_init], maxfev=5000, sigma=np.ones_like(y) * 0.01, absolute_sigma=True)
             a, b = float(popt[0]), float(popt[1])
             if not (np.isfinite(a) and np.isfinite(b) and a > 0 and b >= 0):
                 raise Exception

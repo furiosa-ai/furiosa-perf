@@ -1,17 +1,18 @@
 import os
-import venv
 import signal
 import subprocess
-
+import venv
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Any
 from pathlib import Path
+from typing import Any
+
 from pytablewriter import MarkdownTableWriter
-from furiosa_perf.utils.logger import logger
-from furiosa_perf.runner.monitor import HardwareMonitor
+
 from furiosa_perf.configs.settings import PerformanceBenchConfig, ScenarioConfig
+from furiosa_perf.runner.monitor import HardwareMonitor
+from furiosa_perf.utils.logger import logger
 
 WORKSPACE = "./bench_space"
 
@@ -82,7 +83,7 @@ class VllmPerformanceBenchmark:
         host: str | None = None,
         port: int | None = None,
         dev: bool = False,
-        env: dict[str, Any] = {},
+        env: dict[str, Any] | None = None,
     ) -> None:
         self.name = config.name
         self.model = config.model
@@ -95,8 +96,8 @@ class VllmPerformanceBenchmark:
         self.total_results: dict[str, Any] = {}
         self.host = host
         self.port = port
-        self.bench_process = None
-        self.env = env
+        self.bench_process: subprocess.Popen[str] | None = None
+        self.env = env or {}
 
         self.branch = self.ENV[self.dev]["BRANCH"]
         self.repo_name = self.ENV[self.dev]["REPO_NAME"]
@@ -146,6 +147,24 @@ class VllmPerformanceBenchmark:
         self._execute_setup_commands()
         logger.info(f"{self.name} setup completed successfully")
 
+    def stop(self) -> None:
+        if not self.bench_process:
+            return
+
+        if self.bench_process.poll() is None:
+            logger.info("Stopping benchmark process")
+            try:
+                os.killpg(os.getpgid(self.bench_process.pid), signal.SIGTERM)
+                self.bench_process.wait(timeout=5)
+                logger.info("Benchmark process stopped")
+            except subprocess.TimeoutExpired:
+                os.killpg(os.getpgid(self.bench_process.pid), signal.SIGKILL)
+                logger.warning("Benchmark process force killed")
+        else:
+            logger.info(f"Benchmark process already exited with code {self.bench_process.poll()}")
+
+        self.bench_process = None
+
     def _execute_setup_commands(self) -> None:
         cwd = self.base_dir
         venv.create(self.venv_dir, with_pip=True)
@@ -155,8 +174,8 @@ class VllmPerformanceBenchmark:
             if self.repo_dir.exists() and step_name == "down_benchmark":
                 logger.info(f"Skipping {step_name}, {self.repo_name} already exists.")
                 continue
-            p = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
-            if p.returncode != 0:
+            process = subprocess.run(command, cwd=cwd, capture_output=True, text=True)  # noqa: S603
+            if process.returncode != 0:
                 raise RuntimeError(f"Setup step: {step_name} failed")
 
     def _get_format_args(self, scenario: ScenarioConfig) -> dict[str, Any]:
@@ -195,11 +214,14 @@ class VllmPerformanceBenchmark:
 
             start_timestamp = datetime.now(timezone.utc).isoformat()
             env = os.environ.copy()
-            env.update({"HF_TOKEN": self.env["HF_TOKEN"]})
-            self.bench_process = subprocess.Popen(
+            hf_token = self.env.get("HF_TOKEN")
+            if hf_token:
+                env["HF_TOKEN"] = str(hf_token)
+
+            self.bench_process = subprocess.Popen(  # noqa: S603
                 command,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
                 text=True,
                 cwd=cwd,
                 bufsize=1,
@@ -214,7 +236,9 @@ class VllmPerformanceBenchmark:
 
             self.bench_process.wait()
             if self.bench_process.returncode != 0:
-                raise RuntimeError(f"Benchmark execution failed - Command failed with code {self.bench_process.returncode}")
+                raise RuntimeError(
+                    f"Benchmark execution failed - Command failed with code {self.bench_process.returncode}"
+                )
             self.bench_process = None
 
             end_timestamp = datetime.now(timezone.utc).isoformat()
@@ -222,16 +246,14 @@ class VllmPerformanceBenchmark:
 
             result.update(
                 HardwareMonitor.get_benchmark_power_summary(
-                    csv_file_path=os.path.join(
-                        self.base_dir, f"{self.device_name}_{self.used_device_num}_monitoring_log.csv"
-                    ),
+                    csv_file_path=str(self.base_dir / f"{self.device_name}_{self.used_device_num}_monitoring_log.csv"),
                     start_dt=start_timestamp,
                     end_dt=end_timestamp,
-                    target_csv_file_path=os.path.join(
+                    target_csv_file_path=str(
                         self.get_vllm_result_dir(
                             f"{scenario.input_tokens}.{scenario.output_tokens}.{scenario.max_concurrency}"
-                        ),
-                        f"{self.device_name}_{self.used_device_num}_monitoring_log.csv",
+                        )
+                        / f"{self.device_name}_{self.used_device_num}_monitoring_log.csv"
                     ),
                 )
             )
@@ -239,7 +261,8 @@ class VllmPerformanceBenchmark:
             logger.info(f"Parsed result: {result}")
             self.total_results["results"].append(result)
 
-        assert len(self.total_results["results"]) > 0, "No results collected from benchmarks"
+        if not self.total_results["results"]:
+            raise RuntimeError("No results collected from benchmarks")
         logger.info(f"Total results collected: {len(self.total_results)}")
 
     def _parse_results(self, stdout: str, scenario: ScenarioConfig) -> dict[str, Any]:
@@ -254,8 +277,8 @@ class VllmPerformanceBenchmark:
         for line in lines:
             try:
                 metric, *_, score = line.split()
-            except ValueError as e:
-                logger.debug(f"Error occured: {e}")
+            except ValueError as exc:
+                logger.debug(f"Error occured: {exc}")
                 continue
             if "Total token throughput (tok/s):" in line or "Total Token throughput (tok/s):" in line:
                 results["Total Throughput(tok/s)"] = float(score)
@@ -316,18 +339,18 @@ class VllmPerformanceBenchmark:
                 )
             )
 
-            with Path.open(self.get_vllm_result_dir("") / f"summary_{isl_osl}.md", "w") as f:
-                f.write(desc + "\n" + md_writer.dumps() + "\n")
+            with Path.open(self.get_vllm_result_dir("") / f"summary_{isl_osl}.md", "w") as file:
+                file.write(desc + "\n" + md_writer.dumps() + "\n")
 
-            with Path.open(self.get_vllm_result_dir("") / f"summary_{isl_osl}.csv", "w") as f:
-                f.write(desc + "\n" + "\n".join(csv_contents) + "\n")
+            with Path.open(self.get_vllm_result_dir("") / f"summary_{isl_osl}.csv", "w") as file:
+                file.write(desc + "\n" + "\n".join(csv_contents) + "\n")
 
         md_writer.value_matrix = total_md_contents
-        with Path.open(self.get_vllm_result_dir("") / f"summary.md", "w") as f:
-            f.write(desc + "\n" + md_writer.dumps() + "\n")
+        with Path.open(self.get_vllm_result_dir("") / "summary.md", "w") as file:
+            file.write(desc + "\n" + md_writer.dumps() + "\n")
 
-        with Path.open(self.get_vllm_result_dir("") / f"summary.csv", "w") as f:
-            f.write(desc + "\n" + "\n".join(total_csv_contents) + "\n")
+        with Path.open(self.get_vllm_result_dir("") / "summary.csv", "w") as file:
+            file.write(desc + "\n" + "\n".join(total_csv_contents) + "\n")
 
     def _to_isl_osl_result(self, input_tokens: int, output_tokens: int) -> str:
         isl = f"{input_tokens//1024}k" if input_tokens >= 1024 else str(input_tokens)
@@ -344,29 +367,9 @@ class VllmPerformanceBenchmark:
         """Return the benchmark result directory."""
         task_name = f"dev-{self.task}" if self.dev == "dev" else self.task
         result_dir = Path(
-            self.base_dir
-            / f"{self.device_name}_{self.used_device_num}_{self.backend}"
-            / self.name
-            / task_name
-            / self.model.split("/")[-1]
-            / result_name
+            self.base_dir / f"{self.device_name}_{self.used_device_num}_{self.backend}" / self.name / task_name / self.model.split("/")[-1] / result_name
         )
         if not result_dir.exists():
             result_dir.mkdir(parents=True)
 
         return result_dir.resolve()
-
-    def stop(self) -> None:
-        if self.bench_process is None:
-            return
-        
-        if self.bench_process.poll() is None:
-            try:
-                os.killpg(os.getpgid(self.bench_process.pid), signal.SIGTERM)
-                self.bench_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(os.getpgid(self.bench_process.pid), signal.SIGKILL)
-        else:
-            exit_code = self.bench_process.poll()
-        
-        self.bench_process = None
