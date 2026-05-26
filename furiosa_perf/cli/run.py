@@ -6,7 +6,6 @@ from furiosa_perf.runner.runner import BenchmarkRunner
 from furiosa_perf.utils.collect_env import SystemDetector
 from furiosa_perf.utils.logger import logger, setup_logger
 
-
 @click.command()
 @click.option(
     "--model",

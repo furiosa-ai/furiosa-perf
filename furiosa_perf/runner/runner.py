@@ -1,10 +1,9 @@
 import multiprocessing
 import os
 import signal
+import yaml
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 from furiosa_perf.benchmark.vllm import VllmPerformanceBenchmark
 from furiosa_perf.configs.settings import (
@@ -16,7 +15,6 @@ from furiosa_perf.configs.settings import (
 from furiosa_perf.runner.monitor import HardwareMonitor
 from furiosa_perf.runner.server import APIServerManager
 from furiosa_perf.utils.logger import logger
-
 
 class BenchmarkRunner:
     def __init__(
@@ -71,6 +69,7 @@ class BenchmarkRunner:
 
         try:
             api_server = APIServerManager(model=model, config=self.api_server_config, save_api_log=self.save_api_log)
+            api_server = APIServerManager(model=model, config=self.api_server_config, save_api_log=self.save_api_log)
             logger.info(f"Starting server for {model}")
             server_command = api_server.start()
             desc = (
@@ -84,8 +83,8 @@ class BenchmarkRunner:
             self.benchmark_config.device_name = self.system_info.hardware[self.hardware_type]["name"]
             self.benchmark_config.used_device_num = len(self.api_server_config.devices.split(","))
             benchmark = VllmPerformanceBenchmark(
-                config=self.benchmark_config,
-                backend=self.system_info.runtime,
+                config=self.benchmark_config, 
+                backend=self.system_info.runtime, 
                 dev=dev,
                 host=api_server.config.host,
                 port=api_server.config.port,
@@ -93,22 +92,28 @@ class BenchmarkRunner:
             )
             benchmark.setup()
 
+            server_pid = api_server.server_proc.pid if api_server.server_proc else -1
             stop_monitor_event = multiprocessing.Event()
+            if api_server.server_process is not None:
+                server_pid = api_server.server_process.pid
+            else:
+                server_pid = -1
+
             monitoring_proc = HardwareMonitor.start_monitor(
                 api_server.config.host,
                 api_server.config.port,
-                api_server.server_pid,
+                server_pid,
                 benchmark.device_name,
                 benchmark.used_device_num,
                 benchmark.base_dir,
                 stop_monitor_event,
             )
             benchmark.run()
-
-        except Exception:
-            logger.exception("Benchmark execution failed")
-            raise
+        
+        except RuntimeError as e:
+            raise RuntimeError(f"Benchmark failed: {e}")
         finally:
+            # Ignore SIGINT during cleanup so Ctrl-C doesn't leave orphaned processes
             old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
             try:
                 if benchmark is not None:
@@ -117,7 +122,7 @@ class BenchmarkRunner:
                     except Exception:
                         logger.exception("Failed to stop benchmark")
 
-                if monitoring_proc is not None and stop_monitor_event is not None:
+                if monitoring_proc is not None:
                     try:
                         stop_monitor_event.set()
                         monitoring_proc.join(timeout=5)

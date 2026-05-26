@@ -23,7 +23,8 @@ class APIServerManager:
         self.config = config
         self.save_api_log = save_api_log
         self.server_process: subprocess.Popen[str] | None = None
-        self.server_ready = False
+        self.server_proc: psutil.Process | None = None
+        self.log_output = "api_server.log" if save_api_log else subprocess.DEVNULL
         self.server_pid = -1
         self._log_file = None
         self._log_path: Path | None = None
@@ -40,6 +41,15 @@ class APIServerManager:
         if self.server_process and self.server_process.poll() is None:
             logger.warning("Server already running")
             self._get_opened_server_pid()
+            return ""
+    def start(self) -> str:
+        if self._is_api_server_ready():
+            logger.warning(f"API server already running for model: {self.model}")
+            self.server_proc = self._find_process_by_port(self.config.port)
+            return ""
+
+        if self.server_process and self.server_process.poll() is None:
+            logger.warning("Server process already running but not yet ready")
             return ""
 
         command, env = self._build_command()
@@ -71,8 +81,9 @@ class APIServerManager:
         )
 
         self._wait_for_startup()
+        self._wait_for_startup()
+        self.server_proc = psutil.Process(self.server_process.pid)
         self.server_ready = True
-        self.server_pid = self.server_process.pid
         logger.info("Server is ready")
         return " ".join(command)
 
@@ -104,15 +115,13 @@ class APIServerManager:
 
     def _build_command(self) -> tuple[list[str], dict[str, str]]:
         env = os.environ.copy()
-        command: list[str] = []
 
         if isinstance(self.config, VllmServerConfig):
             command = ["vllm", "serve", self.model]
             for key, value in asdict(self.config).items():
                 if value is None:
                     continue
-
-                cli_key = self._to_kebab_case(key)
+                cli_key = key.replace("_", "-")
                 if isinstance(value, bool):
                     if value:
                         command.append(f"--{cli_key}")
@@ -129,8 +138,7 @@ class APIServerManager:
             for key, value in asdict(self.config).items():
                 if value is None:
                     continue
-
-                cli_key = self._to_kebab_case(key)
+                cli_key = key.replace("_", "-")
                 if isinstance(value, bool):
                     if value:
                         command.append(f"--{cli_key}")
@@ -205,3 +213,12 @@ class APIServerManager:
             if proc.info["name"] == process_name:
                 self.server_pid = proc.info["pid"]
                 return
+
+    def _find_process_by_port(self, port: int) -> psutil.Process | None:
+        for conn in psutil.net_connections(kind="inet"):
+            if conn.laddr.port == port and conn.status == "LISTEN" and conn.pid:
+                try:
+                    return psutil.Process(conn.pid)
+                except psutil.NoSuchProcess:
+                    return None
+        return None
