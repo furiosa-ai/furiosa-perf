@@ -24,11 +24,14 @@ It also provides an **experimental** `report` feature that aggregates benchmark 
 - **Python**: 3.10+
 - **APT dependency**: `python3-venv` (required to create a local Python venv for the benchmark tool)
 
-On Ubuntu/Debian:
+On Ubuntu/Debian, install the venv package matching your Python version:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3-venv
+# Ubuntu 24.04 (Python 3.12)
+sudo apt-get install -y python3.12-venv
+# Ubuntu 22.04 (Python 3.10)
+sudo apt-get install -y python3.10-venv
 ```
 
 ### Backend prerequisites
@@ -106,7 +109,7 @@ furiosa-perf run \
   --backend furiosa-llm \
   --hardware-type npu \
   --server-config /root/furiosa-perf/configs/serving_scenarios/exaone_4_32b_fp8.yaml \
-  --benchmark-config /root/furiosa-perf/configs/performance_scenarios/benchmark_32k.yaml \
+  --benchmark-config /root/furiosa-perf/configs/performance_scenarios/test.yaml \
   --model "furiosa-ai/EXAONE-4.0-32B-FP8"
 ```
 

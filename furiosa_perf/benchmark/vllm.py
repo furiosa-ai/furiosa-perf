@@ -1,4 +1,5 @@
 import os
+import sys
 import venv
 import signal
 import subprocess
@@ -148,7 +149,7 @@ class VllmPerformanceBenchmark:
 
     def _execute_setup_commands(self) -> None:
         cwd = self.base_dir
-        venv.create(self.venv_dir, with_pip=True)
+        subprocess.run([sys.executable, "-m", "venv", str(self.venv_dir)], check=True)
 
         for step_name, command in self.SETUP_COMMANDS:
             logger.info(f"Setup step : {step_name}")
