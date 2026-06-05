@@ -209,7 +209,7 @@ Results are written under `./bench_space/` relative to your working directory.
 
 ```
 bench_space/
-└── <DEVICE>_<NUM>_<BACKEND>/
+└── <DEVICE>_<NUM>_<BACKEND>_<VERSION>/
     └── <name>/<task>/<model>/
         ├── summary_<ISL>_<OSL>.md        # Markdown table
         ├── summary_<ISL>_<OSL>.csv       # CSV summary
@@ -223,7 +223,7 @@ Server logs are written to `./serve_logs/`.
 **Example path:**
 
 ```
-bench_space/RNGD_4_furiosa-llm/vllm/offline/EXAONE-4.0-32B-FP8/summary_1k_1k.csv
+bench_space/RNGD_4_furiosa-llm_2026.2.0/vllm/offline/EXAONE-4.0-32B-FP8/summary_1k_1k.csv
 ```
 
 ---

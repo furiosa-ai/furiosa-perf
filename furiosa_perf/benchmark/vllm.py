@@ -244,7 +244,8 @@ class VllmPerformanceBenchmark:
 
         start_timestamp = datetime.now(UTC).isoformat()
         env = os.environ.copy()
-        env.update({"HF_TOKEN": self.env.get("HF_TOKEN", "")})
+        if hf_token := self.env.get("HF_TOKEN"):
+             env["HF_TOKEN"] = hf_token
         self.bench_process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,

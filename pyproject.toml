@@ -9,7 +9,7 @@ description = "LLM serving performance benchmark CLI for Furiosa NPU and NVIDIA 
 authors = [{name = "Furiosa AI Inc."}]
 license = {text = "Apache-2.0"}
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 keywords = ["benchmark", "llm", "furiosa", "npu", "gpu", "vllm", "performance"]
 classifiers = [
     "Development Status :: 3 - Alpha",

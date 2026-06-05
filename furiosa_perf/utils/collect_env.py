@@ -37,7 +37,8 @@ class SystemDetector:
             ``False`` when the hardware or framework is not found.
         """
         system_info = SystemDetector.detect_system_info(hardware_type, backend)
-        if system_info.hardware.get(hardware_type) is None:
+        hw = system_info.hardware.get(hardware_type)
+        if hw is None or hw.get("name") == "Unknown":
             logger.warning(f"No {hardware_type.upper()} detected.")
             return False, system_info
 
