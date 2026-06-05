@@ -311,21 +311,20 @@ class HardwareMonitor:
         end_dt: str | None = None,
         target_csv_file_path: str = "",
     ) -> dict[str, Any]:
-        """
-        Get benchmark power summary from the monitoring data.
+        """Compute power summary statistics from the monitoring CSV for a benchmark window.
 
         Args:
-            csv_file_path (str): The path to the monitoring data CSV file.
-            start_dt (str | None, optional): The start datetime (inclusive) used to
-                filter the monitoring data. If None, no lower bound is applied.
-            end_dt (str | None, optional): The end datetime (inclusive) used to
-                filter the monitoring data. If None, no upper bound is applied.
-            target_csv_file_path (str, optional): If provided and non-empty, the
-                filtered data will be saved to this CSV file. Defaults to an empty
-                string, meaning no file will be written.
+            csv_file_path: Path to the monitoring data CSV file.
+            start_dt: ISO-format start datetime (inclusive) for filtering rows.
+                If ``None``, no lower bound is applied.
+            end_dt: ISO-format end datetime (inclusive) for filtering rows.
+                If ``None``, no upper bound is applied.
+            target_csv_file_path: If non-empty, the filtered rows are written to
+                this path as a CSV file.
 
         Returns:
-            dict[str, Any]: A dictionary containing the computed power metrics.
+            A dict with keys ``mean_power``, ``p95_power``, and ``p99_power``
+            (all zero when the filtered window is empty or the file is unreadable).
         """
         df = pd.read_csv(
             csv_file_path,

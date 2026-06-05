@@ -1,2 +1,0 @@
-served_model_name: Qwen/Qwen3-32B-FP8
-devices: 0,1,2,3
