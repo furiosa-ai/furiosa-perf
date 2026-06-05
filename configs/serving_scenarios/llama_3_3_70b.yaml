@@ -1,2 +1,0 @@
-served_model_name: meta-llama/Llama-3.3-70B-Instruct
-devices: 0,1,2,3

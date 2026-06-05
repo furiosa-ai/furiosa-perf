@@ -1,10 +1,17 @@
+"""Shared logger for the furiosa-perf package."""
+
 import logging
 import sys
 
-logger = logging.getLogger("furiosa_bench")
+logger = logging.getLogger("furiosa_perf")
 
 
 def setup_logger(loglevel: str) -> None:
+    """Configure the package logger with a timestamped formatter.
+
+    Args:
+        loglevel: Log level string (e.g. ``"INFO"``, ``"DEBUG"``). Case-insensitive.
+    """
     fmt = logging.Formatter(
         fmt="%(asctime)s.%(msecs)03d %(filename)s:%(lineno)d [%(levelname)s]: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",

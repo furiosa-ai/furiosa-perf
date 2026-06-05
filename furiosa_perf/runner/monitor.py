@@ -7,11 +7,11 @@ CSV-compatible log file.
 
 from __future__ import annotations
 
-import os
+import contextlib
 import subprocess
 import time
 from dataclasses import astuple, dataclass, fields
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from multiprocessing import Process
 from multiprocessing.synchronize import Event as EventType
 from pathlib import Path
@@ -80,15 +80,9 @@ class HardwareMonitor:
             result_dir_path: Directory to write the monitoring CSV.
             stop_event: Event used to stop the monitoring loop.
         """
-        if device_name == "RNGD":
-            target_function = HardwareMonitor._monitor_npu
-        else:
-            target_function = HardwareMonitor._monitor_gpu
+        target_function = HardwareMonitor._monitor_npu if device_name == "RNGD" else HardwareMonitor._monitor_gpu
 
-        result_file_path = os.path.join(
-            result_dir_path,
-            f"{device_name}_{used_device_num}_monitoring_log.csv",
-        )
+        result_file_path = result_dir_path / f"{device_name}_{used_device_num}_monitoring_log.csv"
         proc = Process(
             target=target_function,
             args=(host, port, server_pid, result_file_path, stop_event),
@@ -124,10 +118,8 @@ class HardwareMonitor:
               is 0.0.
         """
         procs: list[psutil.Process] = [parent]
-        try:
+        with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
             procs += parent.children(recursive=True)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
 
         tree_cpu = 0.0
         tree_rss = 0
@@ -146,7 +138,7 @@ class HardwareMonitor:
         host: str,
         port: int,
         server_pid: int,
-        result_file_path: str,
+        result_file_path: Path,
         stop_event: EventType,
         interval: float = 1.0,
     ) -> None:
@@ -170,12 +162,12 @@ class HardwareMonitor:
             parent.cpu_percent(None)
 
         try:
-            with open(result_file_path, "w") as f:
+            with result_file_path.open("w") as f:
                 f.write(HardwareMonitorData.header())
                 while not stop_event.is_set():
                     start_time = time.perf_counter()
                     data = HardwareMonitorData()
-                    data.timestamp = datetime.now(timezone.utc).isoformat()
+                    data.timestamp = datetime.now(UTC).isoformat()
 
                     for device in devices:
                         power_consumption = device.power_consumption()
@@ -227,7 +219,7 @@ class HardwareMonitor:
         host: str,
         port: int,
         server_pid: int,
-        result_file_path: str,
+        result_file_path: Path,
         stop_event: EventType,
         interval: float = 1.0,
     ) -> None:
@@ -237,12 +229,12 @@ class HardwareMonitor:
             parent.cpu_percent(None)
 
         try:
-            with open(result_file_path, "w") as f:
+            with result_file_path.open("w") as f:
                 f.write(HardwareMonitorData.header())
                 while not stop_event.is_set():
                     start_time = time.perf_counter()
                     data = HardwareMonitorData()
-                    data.timestamp = datetime.now(timezone.utc).isoformat()
+                    data.timestamp = datetime.now(UTC).isoformat()
 
                     try:
                         nvidia_smi = subprocess.Popen(
@@ -306,26 +298,25 @@ class HardwareMonitor:
 
     @staticmethod
     def get_benchmark_power_summary(
-        csv_file_path: str,
+        csv_file_path: str | Path,
         start_dt: str | None = None,
         end_dt: str | None = None,
-        target_csv_file_path: str = "",
+        target_csv_file_path: str | Path = "",
     ) -> dict[str, Any]:
-        """
-        Get benchmark power summary from the monitoring data.
+        """Compute power summary statistics from the monitoring CSV for a benchmark window.
 
         Args:
-            csv_file_path (str): The path to the monitoring data CSV file.
-            start_dt (str | None, optional): The start datetime (inclusive) used to
-                filter the monitoring data. If None, no lower bound is applied.
-            end_dt (str | None, optional): The end datetime (inclusive) used to
-                filter the monitoring data. If None, no upper bound is applied.
-            target_csv_file_path (str, optional): If provided and non-empty, the
-                filtered data will be saved to this CSV file. Defaults to an empty
-                string, meaning no file will be written.
+            csv_file_path: Path to the monitoring data CSV file.
+            start_dt: ISO-format start datetime (inclusive) for filtering rows.
+                If ``None``, no lower bound is applied.
+            end_dt: ISO-format end datetime (inclusive) for filtering rows.
+                If ``None``, no upper bound is applied.
+            target_csv_file_path: If non-empty, the filtered rows are written to
+                this path as a CSV file.
 
         Returns:
-            dict[str, Any]: A dictionary containing the computed power metrics.
+            A dict with keys ``mean_power``, ``p95_power``, and ``p99_power``
+            (all zero when the filtered window is empty or the file is unreadable).
         """
         df = pd.read_csv(
             csv_file_path,
