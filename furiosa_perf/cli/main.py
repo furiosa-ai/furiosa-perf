@@ -7,12 +7,12 @@ import warnings
 # since the functionality is unaffected.
 warnings.filterwarnings("ignore", message=".*doesn't match a supported version.*")
 
-import click
+import click  # noqa: E402
 
-from furiosa_perf.cli.run import run
+from furiosa_perf.cli.run import run  # noqa: E402
 
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})  # type: ignore[misc]
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
     """furiosa-perf: LLM serving performance benchmark CLI."""
 

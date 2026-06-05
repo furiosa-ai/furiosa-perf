@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any
 
 import yaml
 
@@ -121,7 +121,7 @@ class APIServerConfigLoader:
         if not api_server_config_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {api_server_config_path}")
 
-        with open(api_server_config_path) as f:
+        with api_server_config_path.open() as f:
             api_server_config = cls._create_config(backend=backend, configs=yaml.safe_load(f))
 
         logger.info(f"Loaded server config: {api_server_config}")
@@ -176,7 +176,7 @@ class RerankerScenarioConfig(BaseScenarioConfig):
     def __post_init__(self) -> None:
         """Default num_prompts to request_rate × 3 when not set."""
         if self.num_prompts is None:
-            self.num_prompts = self.request_rate * 3  # type: ignore[operator]
+            self.num_prompts = self.request_rate * 3  # type: ignore[assignment]
 
 
 @dataclass
@@ -186,10 +186,10 @@ class EmbeddingScenarioConfig(BaseScenarioConfig):
     def __post_init__(self) -> None:
         """Default num_prompts to request_rate × 3 when not set."""
         if self.num_prompts is None:
-            self.num_prompts = self.request_rate * 3  # type: ignore[operator]
+            self.num_prompts = self.request_rate * 3  # type: ignore[assignment]
 
 
-ScenarioConfig: TypeAlias = (
+type ScenarioConfig = (
     LLMScenarioConfig | VLScenarioConfig | RerankerScenarioConfig | EmbeddingScenarioConfig
 )
 
@@ -263,7 +263,7 @@ class PerformanceBenchConfigLoader:
         if not benchmark_config_path.exists():
             raise FileNotFoundError(f"Configuration file not found: {benchmark_config_path}")
 
-        with open(benchmark_config_path) as f:
+        with benchmark_config_path.open() as f:
             benchmark_config = cls._create_config(yaml.safe_load(f))
 
         logger.info(f"Loaded benchmark config: {benchmark_config}")

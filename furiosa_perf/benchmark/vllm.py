@@ -5,7 +5,7 @@ import signal
 import subprocess
 from collections import defaultdict
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -189,7 +189,7 @@ class VllmPerformanceBenchmark:
             **asdict(scenario),
             "model": self.model,
             "result_dir": self.get_vllm_result_dir(
-                f"{scenario.input_tokens}.{scenario.output_tokens}.{scenario.max_concurrency}"
+                f"{scenario.input_tokens}.{scenario.output_tokens}.{scenario.max_concurrency}"  # type: ignore[union-attr]
             ),
         }
 
@@ -242,7 +242,7 @@ class VllmPerformanceBenchmark:
         command = self._get_command_for_scenario(scenario)
         logger.info(f"Executing: {' '.join(command)} | cwd: {cwd}")
 
-        start_timestamp = datetime.now(timezone.utc).isoformat()
+        start_timestamp = datetime.now(UTC).isoformat()
         env = os.environ.copy()
         env.update({"HF_TOKEN": self.env.get("HF_TOKEN", "")})
         self.bench_process = subprocess.Popen(
@@ -268,23 +268,18 @@ class VllmPerformanceBenchmark:
                 f"Benchmark failed — subprocess exited with code {self.bench_process.returncode}"
             )
         self.bench_process = None
-        end_timestamp = datetime.now(timezone.utc).isoformat()
+        end_timestamp = datetime.now(UTC).isoformat()
 
         result = self._parse_results("".join(output_lines), scenario)
         result.update(
             HardwareMonitor.get_benchmark_power_summary(
-                csv_file_path=os.path.join(
-                    self.base_dir,
-                    f"{self.device_name}_{self.used_device_num}_monitoring_log.csv",
-                ),
+                csv_file_path=self.base_dir / f"{self.device_name}_{self.used_device_num}_monitoring_log.csv",
                 start_dt=start_timestamp,
                 end_dt=end_timestamp,
-                target_csv_file_path=os.path.join(
-                    self.get_vllm_result_dir(
-                        f"{scenario.input_tokens}.{scenario.output_tokens}.{scenario.max_concurrency}"
-                    ),
-                    f"{self.device_name}_{self.used_device_num}_monitoring_log.csv",
-                ),
+                target_csv_file_path=self.get_vllm_result_dir(
+                    f"{scenario.input_tokens}.{scenario.output_tokens}.{scenario.max_concurrency}"  # type: ignore[union-attr]
+                )
+                / f"{self.device_name}_{self.used_device_num}_monitoring_log.csv",
             )
         )
         logger.info(f"Parsed result: {result}")
@@ -302,7 +297,7 @@ class VllmPerformanceBenchmark:
         """
         results: dict[str, Any] = {
             "Input Tokens": scenario.input_tokens,
-            "Output Tokens": scenario.output_tokens,
+            "Output Tokens": scenario.output_tokens,  # type: ignore[union-attr]
             "Concurrent": scenario.max_concurrency,
         }
         for line in stdout.strip().split("\n"):
@@ -333,12 +328,12 @@ class VllmPerformanceBenchmark:
         report_desc = self._build_report_desc(desc)
         headers = self._prepare_result_headers(scenario_results)
 
-        isl_osl_result: dict[str, list] = defaultdict(list)
+        isl_osl_result: dict[str, list[Any]] = defaultdict(list)
         for sub_result in scenario_results:
             key = self._to_isl_osl_result(sub_result["Input Tokens"], sub_result["Output Tokens"])
             isl_osl_result[key].append(list(sub_result.values()))
 
-        total_rows: list = []
+        total_rows: list[Any] = []
         for isl_osl, rows in isl_osl_result.items():
             total_rows.extend(rows)
             self._write_summary_files(
@@ -362,11 +357,11 @@ class VllmPerformanceBenchmark:
             f"* Performance Benchmark - {self.name} for {self.task}\n"
             f"* Model Info: {self.model}\n"
             f"* Device Info: {self.device_name} x {self.used_device_num}\n"
-            f"* date: {datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}\n"
+            f"* date: {datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}\n"
             f"* Scenario Results:"
         )
 
-    def _prepare_result_headers(self, scenario_results: list[dict]) -> list[str]:
+    def _prepare_result_headers(self, scenario_results: list[dict[str, Any]]) -> list[str]:
         """Optionally strip P95/P99 keys and return the column header list.
 
         Args:
@@ -381,7 +376,7 @@ class VllmPerformanceBenchmark:
         self,
         result_dir: Path,
         headers: list[str],
-        rows: list,
+        rows: list[Any],
         desc: str,
         suffix: str,
         log: bool = False,

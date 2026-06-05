@@ -8,20 +8,17 @@ import time
 from dataclasses import asdict
 from multiprocessing.synchronize import Event as EventType
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 import psutil
 import requests
-import yaml
 
 from furiosa_perf.benchmark.vllm import VllmPerformanceBenchmark
 from furiosa_perf.runner.monitor import HardwareMonitor
 from furiosa_perf.utils.config import (
     APIServerConfig,
-    APIServerConfigLoader,
     FuriosaLLMServerConfig,
     PerformanceBenchConfig,
-    PerformanceBenchConfigLoader,
     VllmServerConfig,
 )
 from furiosa_perf.utils.logger import logger
@@ -50,7 +47,7 @@ class APIServerManager:
         self.server_process: subprocess.Popen[str] | None = None
         self.server_ready = False
         self.server_pid = -1
-        self._log_file = None
+        self._log_file: TextIO | None = None
         self._log_path: Path | None = None
 
     def __del__(self) -> None:
@@ -88,7 +85,7 @@ class APIServerManager:
         safe_model_name = self.model.replace("/", "_")
         self._log_path = log_dir / f"serve_{safe_model_name}_{int(time.time())}.log"
         logger.info(f"Server log: {self._log_path}")
-        self._log_file = open(self._log_path, "w", buffering=1)
+        self._log_file = open(self._log_path, "w", buffering=1)  # noqa: SIM115, PTH123
 
         env["PYTHONUNBUFFERED"] = "1"
         self.server_process = subprocess.Popen(
@@ -174,7 +171,7 @@ class APIServerManager:
                         value = ",".join(f"npu:{idx}" for idx in value.split(","))
                     if cli_key == "tensor-parallel-size":
                         # furiosa-llm counts PEs (8 per NPU); vLLM counts NPUs.
-                        value = value * 8  # type: ignore[operator]
+                        value = value * 8
                     command.extend([f"--{cli_key}", str(value)])
                 else:
                     logger.warning(f"Unsupported config type for {key}: {type(value)}")
@@ -194,7 +191,7 @@ class APIServerManager:
             resp = requests.get(url, timeout=5)
             resp.raise_for_status()
             model_id = resp.json()["data"][0]["id"]
-            return model_id == expected_model_id
+            return model_id == expected_model_id  # type: ignore[no-any-return]
         except (requests.RequestException, KeyError, IndexError, ValueError):
             return False
 
@@ -215,7 +212,7 @@ class APIServerManager:
 
         while True:
             if self._log_path and self._log_path.exists():
-                with open(self._log_path) as f:
+                with self._log_path.open() as f:
                     f.seek(log_pos)
                     for line in f:
                         logger.info(f"[server] {line.rstrip()}")
@@ -353,7 +350,7 @@ class BenchmarkRunner:
             finally:
                 signal.signal(signal.SIGINT, old_sigint)
 
-        return benchmark.total_results["results"]
+        return benchmark.total_results["results"]  # type: ignore[no-any-return]
 
     def _fetch_pretrained_id(self, api_server: APIServerManager) -> str:
         """Query ``/v1/models`` and return the first model's ID.
@@ -367,9 +364,9 @@ class BenchmarkRunner:
         Raises:
             requests.HTTPError: If the server responds with a non-2xx status.
         """
-        resp = requests.get(f"http://{api_server.config.host}:{api_server.config.port}/v1/models")
+        resp = requests.get(f"http://{api_server.config.host}:{api_server.config.port}/v1/models", timeout=5)
         resp.raise_for_status()
-        return resp.json()["data"][0]["id"]
+        return resp.json()["data"][0]["id"]  # type: ignore[no-any-return]
 
     def _configure_benchmark(self, pretrained_id: str) -> None:
         """Populate benchmark_config fields resolved at runtime.
@@ -379,7 +376,7 @@ class BenchmarkRunner:
         """
         self.benchmark_config.model = pretrained_id
         self.benchmark_config.device_name = self.system_info.hardware[self.hardware_type]["name"]
-        self.benchmark_config.used_device_num = len(self.api_server_config.devices.split(","))
+        self.benchmark_config.used_device_num = len((self.api_server_config.devices or "").split(","))
 
     def _stop_monitor(
         self, proc: multiprocessing.Process, event: EventType
