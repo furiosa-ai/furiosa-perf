@@ -1,13 +1,84 @@
 # furiosa-perf
 
-LLM serving performance benchmark CLI for Furiosa NPU and NVIDIA GPU. Launches an API server, drives [vLLM's benchmark tool](https://github.com/vllm-project/vllm) as the workload generator, collects per-scenario metrics, and writes Markdown/CSV summary reports. Optionally records per-second hardware telemetry (power, temperature, utilisation, KV-cache occupancy) alongside each run.
+`furiosa-perf` is a performance benchmarking CLI for **LLM serving**.
 
-**Sections:**
+It automates the full benchmark pipeline: launch an API server → run [vLLM benchmark](https://github.com/vllm-project/vllm/tree/main/benchmarks) scenarios → collect hardware metrics → save CSV/Markdown summaries.
 
-- Setup: [Quick start](#quick-start), [Prerequisites](#prerequisites), [Installation](#installation)
-- Run: [Running](#running), [Configuration](#configuration)
-- Interpret: [Validated models](#validated-models), [Outputs](#outputs)
-- Debug: [Troubleshooting](#troubleshooting), [Development](#development)
+**Supported backends:**
+
+| Backend | Hardware |
+|---|---|
+| `furiosa-llm` | Furiosa RNGD (NPU) |
+| `vllm` | NVIDIA GPU |
+
+---
+
+## Key features
+
+- **End-to-end automation** — server launch, benchmark execution, and teardown in one command
+- **Hardware monitoring** — power, temperature, utilization (NPU/GPU), host CPU/memory, and server `/metrics`, logged to CSV
+- **Multiple tasks** — `offline` (LLM text), `vl-offline` (vision-language), `reranker`, `embeddings`
+- **Flexible scenarios** — define token lengths and concurrency lists in a single YAML; `max_concurrency` can be a list and is auto-expanded
+
+---
+
+## Requirements
+
+- **OS**: Linux
+- **Python**: 3.12+
+- **APT**: `python3.12-venv` (used internally to create a venv for the vLLM benchmark tool)
+
+```bash
+sudo apt-get install -y python3.12-venv
+```
+
+### Backend prerequisites
+
+**Furiosa NPU + `furiosa-llm`**
+
+```bash
+pip install furiosa-llm
+```
+
+**NVIDIA GPU + vLLM**
+
+```bash
+pip install vllm
+# nvidia-smi must be available for GPU monitoring
+```
+
+---
+
+## Installation
+
+```bash
+git clone https://github.com/furiosa-ai/furiosa-perf.git
+cd furiosa-perf
+
+python3.12 -m venv .venv
+source .venv/bin/activate
+
+pip install -e .
+```
+
+Backend-specific extras:
+
+```bash
+pip install ".[furiosa-llm]"   # Furiosa NPU
+pip install ".[vllm]"          # NVIDIA GPU
+```
+
+> **Note:** activate the venv (`source .venv/bin/activate`) before every session, or add it to your shell profile.
+
+### HuggingFace token (gated models)
+
+```bash
+export HF_TOKEN=hf_...
+# or
+huggingface-cli login
+```
+
+---
 
 ## Quick start
 
@@ -15,199 +86,177 @@ LLM serving performance benchmark CLI for Furiosa NPU and NVIDIA GPU. Launches a
 furiosa-perf run \
   --backend furiosa-llm \
   --hardware-type npu \
-  --server-config examples/server/llama_3_1_8b_1.yaml \
-  --benchmark-config examples/bench/benchmark_32k.yaml \
-  --model-id "furiosa-ai/Llama-3.1-8B-Instruct"
+  --server-config examples/server/exaone4.yaml \
+  --benchmark-config examples/bench/llm_scenario.yaml \
+  --model-id furiosa-ai/EXAONE-4.0-32B-FP8
 ```
 
-Results are written to `./bench_space/`. Open `summary.md` or `summary.csv` for the per-scenario metrics table.
+See [`examples/script.sh`](examples/script.sh) for a complete working example.
 
-## Prerequisites
-### System
+### CLI options
 
-- **OS**: Linux (Ubuntu 22.04 / 24.04 recommended)
-- **Python**: 3.10+
+| Option | Required | Default | Description |
+|---|---|---|---|
+| `--backend` | | `furiosa-llm` | Serving backend (`furiosa-llm` or `vllm`) |
+| `--hardware-type` | | `npu` | Accelerator type (`npu` or `gpu`) |
+| `--server-config` | ✓ | — | API server config YAML |
+| `--benchmark-config` | ✓ | — | Benchmark scenario config YAML |
+| `--model-id` | | `LGAI-EXAONE/EXAONE-4.0-32B-FP8` | HuggingFace model ID or local path |
 
-### Backend
+---
 
-#### Furiosa NPU + `furiosa-llm`
+## Config reference
 
-```bash
-pip install furiosa-llm
-```
+### Server config (`--server-config`)
 
-#### NVIDIA GPU + vLLM
+Controls how the API server is launched. Keys differ slightly by backend.
 
-```bash
-pip install vllm
-
-# Optional — GPU monitoring requires nvidia-smi on PATH
-```
-
-## Installation
-
-```bash
-git clone https://github.com/furiosa-ai/furiosa-perf.git
-cd furiosa-perf
-pip install .
-```
-
-Backend extras:
-
-```bash
-pip install ".[furiosa-llm]"   # Furiosa NPU backend
-pip install ".[vllm]"          # NVIDIA GPU / vLLM backend
-```
-
-## Running
-
-```bash
-furiosa-perf run [OPTIONS]
-```
-
-| Option | Default | Description |
-|---|---|---|
-| `--model-id` | `LGAI-EXAONE/EXAONE-4.0-32B-FP8` | HuggingFace model ID or local path |
-| `--hardware-type` | `npu` | Hardware type: `npu` or `gpu` |
-| `--backend` | `furiosa-llm` | Serving backend: `furiosa-llm` or `vllm` |
-| `--server-config` | *(required)* | Path to API server YAML config |
-| `--benchmark-config` | *(required)* | Path to benchmark YAML config |
-
-## Configuration
-
-### API server config (`--server-config`)
-
-Controls how the LLM API server is launched.
+**Example** (`examples/server/exaone4.yaml`):
 
 ```yaml
-# examples/server/llama_3_1_8b_1.yaml
-devices: "0"
-port: 8000
+served_model_name: furiosa-ai/EXAONE-4.0-32B-FP8
+devices: 0,1,2,3
 ```
 
-| Field | Default | Description |
+**Common keys:**
+
+| Key | Default | Description |
 |---|---|---|
-| `host` | `0.0.0.0` | Bind address |
-| `port` | `8000` | Bind port |
-| `devices` | — | Comma-separated device indices (e.g. `0,1,2,3`) |
+| `host` | `0.0.0.0` | Server bind address |
+| `port` | `8000` | Server port |
+| `devices` | — | Comma-separated RNGD indices to use for serving (e.g. `0,1,2,3`) |
 | `tensor_parallel_size` | inferred from `devices` | TP degree |
 | `served_model_name` | — | Model alias exposed on `/v1/models` |
-| `no_enable_prefix_caching` | `true` | Disable prefix caching |
 
-**NPU device indexing**: use the numbers from the `Device` column of `furiosa-smi info`:
+**Choosing `devices` (Furiosa RNGD)**
 
-```
+`devices` specifies which RNGD cards to use and how many to allocate for the model. The number of devices determines the tensor parallelism degree — larger models require more cards.
+
+First, check how many RNGDs are available in your environment:
+
+```bash
 $ furiosa-smi info
-+------+--------+------------------------+---------+---------+--------------+
-| Arch | Device | Firmware               | Temp.   | Power   | PCI-BDF      |
-+------+--------+------------------------+---------+---------+--------------+
-| rngd | npu0   | 2026.1.0(rc0), 5b172ac | ...     | ...     | 0000:03:00.0 |
-+------+--------+------------------------+---------+---------+--------------+
-| rngd | npu1   | 2026.1.0(rc0), 5b172ac | ...     | ...     | 0000:04:00.0 |
-+------+--------+------------------------+---------+---------+--------------+
++------+--------+-------------------+---------+---------+--------------+
+| Arch | Device | Firmware          | Temp.   | Power   | PCI-BDF      |
++------+--------+-------------------+---------+---------+--------------+
+| rngd | npu0   | 2026.2.0, a5db283 | 36.33°C | 39.00 W | 0000:03:00.0 |
++------+--------+-------------------+---------+---------+--------------+
+| rngd | npu1   | 2026.2.0, a5db283 | 35.99°C | 38.00 W | 0000:04:00.0 |
++------+--------+-------------------+---------+---------+--------------+
+| rngd | npu2   | 2026.2.0, a5db283 | 34.03°C | 39.00 W | 0000:44:00.0 |
++------+--------+-------------------+---------+---------+--------------+
+| rngd | npu3   | 2026.2.0, a5db283 | 35.76°C | 39.00 W | 0000:45:00.0 |
++------+--------+-------------------+---------+---------+--------------+
 ```
 
-```yaml
-devices: "0,1"
-```
+Use the numbers from the **Device** column (`npu0` → `0`, `npu1` → `1`, …) as the `devices` value. For example, to use the first 4 cards: `devices: 0,1,2,3`. If two users share an 8-card server, one can use `0,1,2,3` and the other `4,5,6,7`.
 
-Backend-specific behaviour:
-- **vLLM**: sets `CUDA_VISIBLE_DEVICES` from `devices`.
-- **furiosa-llm**: converts `devices: 0,1` → `--devices npu:0,npu:1`, and scales `tensor_parallel_size` by 8 (PE count per NPU).
+**Supported models and recommended device count**
+
+Furiosa AI supported models are available at [huggingface.co/furiosa-ai](https://huggingface.co/furiosa-ai).
+
+| Model (HuggingFace ID) | Required RNGDs | Example `devices` |
+|---|:---:|---|
+| `furiosa-ai/EXAONE-4.0-32B-FP8` | 4 | `0,1,2,3` or `4,5,6,7` |
+| `furiosa-ai/Llama-3.3-70B-Instruct` | 4 | `0,1,2,3` or `4,5,6,7` |
+| `furiosa-ai/Qwen3-32B-FP8` | 4 | `0,1,2,3` or `4,5,6,7` |
+| `furiosa-ai/Llama-3.1-8B-Instruct` | 1 | `0` or any device available in your environment |
+| `furiosa-ai/Qwen2.5-0.5B-Instruct` | 1 | `0` or any device available in your environment |
+| `furiosa-ai/Qwen3-Embedding-8B` | 1 | `0` or any device available in your environment |
+| `furiosa-ai/Qwen3-Reranker-8B` | 1 | `0` or any device available in your environment |
+
+**Notes:**
+
+- `furiosa-llm` backend: `devices: 0,1,2,3` → `--devices npu:0,npu:1,npu:2,npu:3` (converted automatically)
+- `vllm` backend: `devices` sets `CUDA_VISIBLE_DEVICES`
+
+---
 
 ### Benchmark config (`--benchmark-config`)
 
-Controls which scenarios to run.
+Defines the benchmark name, task, and scenarios.
+
+**Example** (`examples/bench/llm_scenario.yaml`):
 
 ```yaml
-# examples/bench/benchmark_32k.yaml
 name: vllm
 task: offline
 scenarios:
+  - input_tokens: 128
+    output_tokens: 128
+    max_concurrency: [1, 4, 8, 16, 32, 64, 128, 256, 512]
   - input_tokens: 1024
     output_tokens: 1024
-    max_concurrency: [1, 4, 8, 16]
+    max_concurrency: [1, 4, 8, 16, 32, 64, 128, 256]
 ```
 
-| Field | Description |
-|---|---|
-| `name` | Benchmark suite name (used in output directory path) |
-| `task` | `offline`, `vl-offline`, `reranker`, or `embeddings` |
-| `scenarios` | List of scenario objects; `max_concurrency` may be a list and is expanded automatically |
+`max_concurrency` can be a single integer or a list — lists are automatically expanded into separate runs.
 
-Scenario fields (for `offline` / `vl-offline`):
+**Supported tasks:**
 
-| Field | Default | Description |
+| `task` | Description | Required extra fields |
 |---|---|---|
-| `input_tokens` | `1024` | Prompt length in tokens |
-| `output_tokens` | `1024` | Generation length in tokens |
-| `max_concurrency` | `1` | In-flight request cap (list expands to multiple runs) |
-| `num_prompts` | `max_concurrency × 3` | Total requests to send |
-| `request_rate` | `inf` | Target request rate (`inf` = saturate server) |
+| `offline` | LLM text generation | `output_tokens`, `random_range_ratio` |
+| `vl-offline` | Vision-language generation | `output_tokens`, `random_mm_*` fields |
+| `reranker` | Reranking | `random_batch_size` |
+| `embeddings` | Text embeddings | — |
 
-## Validated models
-
-Models validated on **Furiosa RNGD**:
-
-| HuggingFace model ID | TP (NPU count) | Base model |
-|---|---:|---|
-| `furiosa-ai/EXAONE-4.0-32B-FP8` | 4 | `LGAI-EXAONE/EXAONE-4.0-32B` |
-| `furiosa-ai/Qwen3-32B-FP8` | 4 | `Qwen/Qwen2.5-32B-Instruct` |
-| `furiosa-ai/Llama-3.3-70B-Instruct` | 4 | `meta-llama/Llama-3.3-70B-Instruct` |
-| `furiosa-ai/Llama-3.1-8B-Instruct` | 1 | `meta-llama/Llama-3.1-8B-Instruct` |
+---
 
 ## Outputs
 
-Results are written under `./bench_space/` relative to the working directory.
+Results are written under `./bench_space/` relative to your working directory.
 
 ```
 bench_space/
 └── <DEVICE>_<NUM>_<BACKEND>/
     └── <name>/<task>/<model>/
-        ├── summary.md                             # aggregated table (all ISL/OSL groups)
-        ├── summary.csv
-        ├── summary_<ISL>_<OSL>.md                # per input/output-length table
-        ├── summary_<ISL>_<OSL>.csv
-        └── <ISL>.<OSL>.<CONCURRENCY>/
-            ├── <DEVICE>_<NUM>_monitoring_log.csv  # per-second hardware telemetry
-            └── vllm-*.json                        # raw vLLM bench output
+        ├── summary_<ISL>_<OSL>.md        # Markdown table
+        ├── summary_<ISL>_<OSL>.csv       # CSV summary
+        └── <ISL>.<OSL>.<CONC>/
+            ├── <DEVICE>_<NUM>_monitoring_log.csv   # per-scenario hardware metrics
+            └── vllm-*.json                         # raw vLLM benchmark output
 ```
 
-Server logs are written to `./serve_logs/serve_<model>_<timestamp>.log`.
+Server logs are written to `./serve_logs/`.
 
-Monitoring CSV columns: `timestamp`, `power_consumption`, `peak_temperature`, `avg_utilization`, `kv_cache_usage_percentage`, `num_requests_running`, `num_requests_waiting`, `host_cpu_utils`, `host_memory_usage_gib`.
+**Example path:**
 
-## Troubleshooting
-
-**Monitoring CSV is empty or missing**
-- NPU: `furiosa_smi_py` must be importable — install it and verify `furiosa-smi info` works.
-- GPU: `nvidia-smi` must be on `PATH`.
-
-**Server does not start within the timeout (30 min)**
-Run the backend serve command directly and inspect the log at `./serve_logs/`. The startup timeout can be adjusted in `APIServerManager._wait_for_startup`.
-
-**vLLM bench tool not found after `setup()`**
-The benchmark runner installs the benchmark tool into an isolated venv under `./bench_space/`. Ensure `uv` is installed (`pip install uv`).
-
-**`HF_TOKEN` is required**
-```bash
-export HF_TOKEN=<your_token>
 ```
-Models gated on HuggingFace require a token with terms-of-use accepted for the target model.
-
-**`tensor_parallel_size` mismatch error**
-The number of entries in `devices` must equal `tensor_parallel_size`. Either set only `devices` (TP is inferred), or set both consistently.
-
-## Development
-
-```bash
-git clone https://github.com/furiosa-ai/furiosa-perf.git
-cd furiosa-perf
-pip install -e ".[dev]"
-pre-commit install
-pytest -q
+bench_space/RNGD_4_furiosa-llm/vllm/offline/EXAONE-4.0-32B-FP8/summary_1k_1k.csv
 ```
 
 ---
 
-For third-party component attributions, see [LICENSE](LICENSE).
+## Troubleshooting
+
+**Monitoring CSV is empty or missing**
+- NPU: requires `furiosa_smi_py`. If not installed, NPU monitoring is silently skipped.
+- GPU: requires `nvidia-smi`. If not found, GPU monitoring is silently skipped.
+
+**Server fails to start**
+- Check `./serve_logs/` for the server process output.
+- Run the backend command directly to inspect startup errors.
+
+**`HF_TOKEN` not set for gated models**
+- Export `HF_TOKEN` or run `huggingface-cli login` before benchmarking.
+
+---
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+
+# Install lint tools (shfmt, shellcheck, ruff, mypy, yamlfmt, yamllint, actionlint)
+make install-tools
+
+# Run all linters
+make lint
+
+# Run tests
+make test
+
+# Clean caches
+make clean
+```

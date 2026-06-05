@@ -174,9 +174,13 @@ class RerankerScenarioConfig(BaseScenarioConfig):
     random_batch_size: int = 5
 
     def __post_init__(self) -> None:
-        """Default num_prompts to request_rate × 3 when not set."""
+        """Default num_prompts based on request_rate when not set."""
         if self.num_prompts is None:
-            self.num_prompts = self.request_rate * 3  # type: ignore[assignment]
+            if isinstance(self.request_rate, (int, float)):
+                self.num_prompts = int(self.request_rate * 3)
+            else:
+                # "inf" or any non-numeric rate: fall back to a small finite run size.
+                self.num_prompts = self.max_concurrency * 3
 
 
 @dataclass
@@ -184,9 +188,13 @@ class EmbeddingScenarioConfig(BaseScenarioConfig):
     """Scenario config for the ``embeddings`` task."""
 
     def __post_init__(self) -> None:
-        """Default num_prompts to request_rate × 3 when not set."""
+        """Default num_prompts based on request_rate when not set."""
         if self.num_prompts is None:
-            self.num_prompts = self.request_rate * 3  # type: ignore[assignment]
+            if isinstance(self.request_rate, (int, float)):
+                self.num_prompts = int(self.request_rate * 3)
+            else:
+                # "inf" or any non-numeric rate: fall back to a small finite run size.
+                self.num_prompts = self.max_concurrency * 3
 
 
 type ScenarioConfig = (
