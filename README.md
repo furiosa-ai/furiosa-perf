@@ -11,6 +11,8 @@ It automates the full benchmark pipeline: launch an API server → run [vLLM ben
 | `furiosa-llm` | Furiosa RNGD (NPU) |
 | `vllm` | NVIDIA GPU |
 
+See [Benchmark Methodology](examples/BENCHMARK.md) for a detailed explanation of the benchmark design, metrics, and how to interpret results.
+
 ---
 
 ## Key features
