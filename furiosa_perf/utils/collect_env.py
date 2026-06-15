@@ -102,8 +102,12 @@ class SystemDetector:
         rc, out, _ = run_lambda("lscpu")
         if rc == 0:
             architecture = out.split("Architecture:")[1].strip().split("\n")[0]
-            model_name = out.split("Model name:")[1].strip().split("\n")[0]
             cores = int(out.split("CPU(s):")[1].strip().split("\n")[0])
+            # Some architectures like ARM may not have "Model name:" field
+            if "Model name:" in out:
+                model_name = out.split("Model name:")[1].strip().split("\n")[0]
+            else:
+                model_name = architecture
         else:
             architecture = "Unknown"
             model_name = "Unknown"
