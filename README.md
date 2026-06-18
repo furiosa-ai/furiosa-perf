@@ -225,8 +225,39 @@ Server logs are written to `./serve_logs/`.
 **Example path:**
 
 ```
-bench_space/RNGD_4_furiosa-llm_2026.2.0/vllm/offline/EXAONE-4.0-32B-FP8/summary_1k_1k.csv
+bench_space/RNGD_4_furiosa-llm/vllm/offline/EXAONE-4.0-32B-FP8/summary.csv
 ```
+
+---
+
+## Reports
+
+Turn one or more benchmark runs into a self-contained interactive HTML report:
+
+```bash
+furiosa-perf report \
+  --benchmark-result-path ./bench_space \
+  --model-list all \
+  --task-list all \
+  --report-path ./report
+```
+
+The command walks `--benchmark-result-path` for `<task>/<model>/summary.csv`
+files (the aggregate summaries written by `run`), and renders per-(ISL/OSL)
+charts — throughput table, interactive per-user curve, rack-level performance,
+TTFT/TPOT, and TPS/Watt — into `--report-path` (default `./report`). Open
+`report/index.html` in a browser. The raw CSVs are also bundled under
+`report/csv/` and indexed in `report/manifest.json`.
+
+### CLI options
+
+| Option | Required | Default | Description |
+|---|---|---|---|
+| `--benchmark-result-path` | ✓ | — | Root directory to scan for `summary.csv` results |
+| `--model-list` | | `all` | Comma-separated model names, or `all` |
+| `--task-list` | | `all` | Comma-separated task names, or `all` |
+| `--report-contents` | | — | Optional YAML overriding the report title/abstract/theme |
+| `--report-path` | | `./report` | Output directory for the generated report |
 
 ---
 
