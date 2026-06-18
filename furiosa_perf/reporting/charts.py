@@ -475,6 +475,7 @@ def plot_summary_ratio_bar_chart(
     metric_label: str,
     ratio_caption: str,
     reference_ratio: float,
+    meta_by_model: dict[str, dict[int, tuple[int, int]]] | None = None,
 ) -> go.Figure:
     """Build a grouped bar chart of RNGD-vs-GPU performance ratios.
 
@@ -492,6 +493,9 @@ def plot_summary_ratio_bar_chart(
         ratio_caption (str): Short caption describing the ratio direction
             (e.g. ``"RNGD / RTX Pro 6000"``).
         reference_ratio (float): Y value for the dashed reference line.
+        meta_by_model (dict[str, dict[int, tuple[int, int]]] | None): Optional
+            ``model -> {concurrency -> (rngd_devices, rtx_devices)}`` used to show the
+            matched device counts in each bar's hover tooltip.
 
     Returns:
         go.Figure: The grouped bar figure.
@@ -502,13 +506,24 @@ def plot_summary_ratio_bar_chart(
         ys = [by_conc.get(c) for c in concurrents]
         if all(y is None for y in ys):
             continue
+        meta = (meta_by_model or {}).get(model, {})
+        if meta:
+            customdata = [list(meta.get(c, (None, None))) for c in concurrents]
+            hovertemplate = (
+                f"{model}<br>Concurrent=%{{x}}<br>{metric_label}: %{{y:.2f}}x"
+                "<br>RNGD ×%{customdata[0]} vs RTX Pro 6000 ×%{customdata[1]}<extra></extra>"
+            )
+        else:
+            customdata = None
+            hovertemplate = f"{model}<br>Concurrent=%{{x}}<br>{metric_label}: %{{y:.2f}}x<extra></extra>"
         fig.add_trace(
             go.Bar(
                 name=model,
                 x=x_labels,
                 y=ys,
                 marker_color=color_map.get(model),
-                hovertemplate=f"{model}<br>Concurrent=%{{x}}<br>{metric_label}: %{{y:.2f}}x<extra></extra>",
+                customdata=customdata,
+                hovertemplate=hovertemplate,
             )
         )
 

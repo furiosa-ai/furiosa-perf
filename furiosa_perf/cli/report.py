@@ -192,24 +192,69 @@ def _latest_backend_rows(model_df: pd.DataFrame, family: str, backend: str) -> p
     return sub[sub["version"] == sub["version"].max()]
 
 
-def _agg_per_concurrency(sub: pd.DataFrame, column: str, better: str) -> dict[int, float]:
-    """Reduce repeated configs at each concurrency to a single best value.
+def _best_per_concurrency(sub: pd.DataFrame, column: str, better: str) -> dict[int, tuple[float, int]]:
+    """Best metric value per concurrency, plus the device count that achieved it.
 
     Args:
-        sub (pd.DataFrame): Rows for one model+device (latest version).
+        sub (pd.DataFrame): Rows for one model + hardware family (latest version).
         column (str): Metric column to read.
         better (str): ``"high"`` (throughput-like; keep the max) or ``"low"``
             (latency-like; keep the min).
 
     Returns:
-        dict[int, float]: ``concurrency -> value`` with zero/NaN values dropped (they
-        cannot be used as a ratio numerator or denominator).
+        dict[int, tuple[float, int]]: ``concurrency -> (value, num_devices)``. When
+        several device counts tie on value the smaller device count wins. Zero/NaN
+        values are dropped (they cannot be used as a ratio term).
     """
     if sub.empty or column not in sub.columns:
         return {}
-    grouped = sub.dropna(subset=[column]).groupby("Concurrent")[column]
-    reduced = grouped.max() if better == "high" else grouped.min()
-    return {int(c): float(v) for c, v in reduced.items() if pd.notna(v) and v != 0}
+    s = sub.dropna(subset=[column])
+    s = s[s[column] != 0]
+    out: dict[int, tuple[float, int]] = {}
+    ascending = better == "low"
+    for concurrency, grp in s.groupby("Concurrent"):
+        row = grp.sort_values([column, "num_devices"], ascending=[ascending, True]).iloc[0]
+        out[int(concurrency)] = (float(row[column]), int(row["num_devices"]))
+    return out
+
+
+def _closest_per_concurrency(
+    sub: pd.DataFrame, column: str, better: str, targets: dict[int, int]
+) -> dict[int, tuple[float, int]]:
+    """Per concurrency, the value of the device count closest to ``targets[c]``.
+
+    Used to match the GPU (RTX Pro 6000) result to the RNGD device count chosen for
+    the same model + concurrency, so the ratio compares like-sized systems.
+
+    Args:
+        sub (pd.DataFrame): Rows for one model + hardware family (latest version).
+        column (str): Metric column to read.
+        better (str): ``"high"`` (max) or ``"low"`` (min) tie-break when one device
+            count has multiple rows at a concurrency.
+        targets (dict[int, int]): ``concurrency -> reference device count`` to match.
+
+    Returns:
+        dict[int, tuple[float, int]]: ``concurrency -> (value, num_devices)`` for the
+        concurrencies present in both ``sub`` and ``targets``. Ties on distance pick
+        the smaller device count.
+    """
+    if sub.empty or column not in sub.columns:
+        return {}
+    s = sub.dropna(subset=[column])
+    s = s[s[column] != 0]
+    out: dict[int, tuple[float, int]] = {}
+    for concurrency, grp in s.groupby("Concurrent"):
+        c = int(concurrency)
+        if c not in targets:
+            continue
+        target = targets[c]
+        unique_counts = sorted({int(x) for x in grp["num_devices"].unique()})
+        n = min((abs(nc - target), nc) for nc in unique_counts)[1]  # closest count, tie -> smaller
+        vals = grp[grp["num_devices"] == n][column]
+        value = float(vals.max() if better == "high" else vals.min())
+        if value != 0:
+            out[c] = (value, n)
+    return out
 
 
 def build_summary_charts(frames: list[pd.DataFrame]) -> list[dict[str, Any]]:
@@ -217,9 +262,10 @@ def build_summary_charts(frames: list[pd.DataFrame]) -> list[dict[str, Any]]:
 
     For the configured ISL/OSL scenario, one bar chart is produced per metric in
     :data:`SUMMARY_METRICS`, with concurrency on the x-axis and one toggleable bar
-    per model. A concurrency contributes a bar only when *both* the NPU (latest
-    furiosa-llm) and the GPU (latest vLLM) measured it; models unsupported on RNGD
-    therefore render no bar at that point.
+    per model. At each concurrency the RNGD side uses its best-performing device
+    count (latest furiosa-llm) and the RTX Pro 6000 side is matched to the device
+    count closest to it (latest vLLM). A bar is drawn only when *both* sides measured
+    that concurrency, so models unsupported on RNGD render no bar.
 
     Args:
         frames (list[pd.DataFrame]): Per-(model, task) frames from
@@ -245,22 +291,31 @@ def build_summary_charts(frames: list[pd.DataFrame]) -> list[dict[str, Any]]:
     for metric in SUMMARY_METRICS:
         column, better, direction = metric["column"], metric["better"], metric["ratio"]
         series_by_model: dict[str, dict[int, float]] = {}
+        meta_by_model: dict[str, dict[int, tuple[int, int]]] = {}
         concurrency_set: set[int] = set()
 
         for model in models:
             mdf = df[df["model"] == model]
-            npu = _agg_per_concurrency(
+            npu = _best_per_concurrency(
                 _latest_backend_rows(mdf, SUMMARY_NPU_FAMILY, SUMMARY_NPU_BACKEND), column, better
             )
-            gpu = _agg_per_concurrency(
-                _latest_backend_rows(mdf, SUMMARY_GPU_FAMILY, SUMMARY_GPU_BACKEND), column, better
+            targets = {c: n for c, (_, n) in npu.items()}
+            gpu = _closest_per_concurrency(
+                _latest_backend_rows(mdf, SUMMARY_GPU_FAMILY, SUMMARY_GPU_BACKEND), column, better, targets
             )
-            ratios = {
-                c: round(npu[c] / gpu[c], 2) if direction == "npu/gpu" else round(gpu[c] / npu[c], 2)
-                for c in sorted(set(npu) & set(gpu))
-            }
+
+            ratios: dict[int, float] = {}
+            meta: dict[int, tuple[int, int]] = {}
+            for c in sorted(set(npu) & set(gpu)):
+                npu_value, npu_n = npu[c]
+                gpu_value, gpu_n = gpu[c]
+                ratios[c] = (
+                    round(npu_value / gpu_value, 2) if direction == "npu/gpu" else round(gpu_value / npu_value, 2)
+                )
+                meta[c] = (npu_n, gpu_n)
             if ratios:
                 series_by_model[model] = ratios
+                meta_by_model[model] = meta
                 concurrency_set.update(ratios)
 
         if not series_by_model:
@@ -274,6 +329,7 @@ def build_summary_charts(frames: list[pd.DataFrame]) -> list[dict[str, Any]]:
             metric["label"],
             caption,
             SUMMARY_REFERENCE_RATIO,
+            meta_by_model,
         )
         charts.append(
             {

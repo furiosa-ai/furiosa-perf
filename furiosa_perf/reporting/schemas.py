@@ -73,6 +73,7 @@ class BenchmarkMetricLoader:
                 "Power(w)": col("mean_power", 0.0),
                 "device": f"{device}x{num}+{backend}_{version}",
                 "hardware": device,
+                "num_devices": int(num),
                 "backend": backend,
                 "version": version,
             }
