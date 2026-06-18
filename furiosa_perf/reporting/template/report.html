@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ theme }}">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="./static/custom.css">
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <script src="./template/report_theme.js" defer></script>
+    <script src="./template/report.js" defer></script>
+  </head>
+
+
+  <body>
+    <div class="report-layout">
+      <aside class="report-sidebar">
+        <div class="report-logo"></div>
+        <div class="report-sidebar-title">
+          Furiosa RNGD<br/>Benchmark Portal
+        </div>
+
+        <div class="controls sidebar-controls">
+          <div class="field"> 
+            <label for="model-select" class="field-label"><p>&nbsp;&nbsp;Model Type</p></label>
+            <div class="select-wrapper">
+              <select id="model-select">
+                {% if summary and summary.charts %}
+                  <option value="__overview__">Overview</option>
+                {% endif %}
+                {% for model in model_list %}
+                  <option value="{{ model }}">{{ model }}</option>
+                {% endfor %}
+              </select>
+              <span class="select-arrow">▼</span>
+            </div>
+          </div>
+
+          <div class="field" id="task-field">
+            <label for="task-select" class="field-label"><p>&nbsp;&nbsp;Task</p></label>
+            <div class="select-wrapper">
+              <select id="task-select">
+                {% for task in task_list %}
+                  <option value="{{ task }}">{{ task }}</option>
+                {% endfor %}
+              </select>
+              <span class="select-arrow">▼</span>
+            </div>
+          </div>
+
+          {% for item in items %}
+            {% for task in task_list %}
+              {% if task in item.content %}
+              <div class="field token-field"
+                  data-model="{{ item.model }}"
+                  data-task="{{ task }}"
+                  style="display:none;">
+                <label for="token-select-{{ item.model }}-{{ task }}" class="field-label">
+                  <p>&nbsp;&nbsp;{{ item.content[task].key }}</p>
+                </label>
+
+                <div class="select-wrapper">
+                  <select id="token-select-{{ item.model }}-{{ task }}"
+                          class="token-select"
+                          data-model="{{ item.model }}"
+                          data-task="{{ task }}">
+                    {% for oc in (item.content[task].charts or []) %}
+                      <option value="{{ oc.tokens }}">{{ oc.tokens }}</option>
+                    {% endfor %}
+                  </select>
+                  <span class="select-arrow">▼</span>
+                </div>
+              </div>
+              {% endif %}
+            {% endfor %}
+          {% endfor %}
+
+          <button id="download-zip-btn" type="button">
+            Download ⬇
+          </button>
+        </div>
+      </aside>
+
+      <main class="report-main">
+        <div class="container">
+          <button id="theme-toggle-btn" type="button">
+            Theme
+          </button>
+          <h1>{{ title }}</h1>
+          <p>
+            LLM inference performance is a key factor that determines both the quality and cost of AI services,
+            yet making fair, apples-to-apples comparisons across hardware platforms remains challenging.
+            Rapid changes in the software stack and hardware-specific optimization points quickly make static benchmarks diverge from real-world deployments.
+          </p>
+          <p>
+            In this report, we evaluate LLM inference on Furiosa AI's RNGD using the furiosa-llm, and on a range of GPUs using vLLM.
+            For each hardware and sofrware platform, we systematically sweep tensor parallel sizes and concurrency levels,
+            and present the results primarily from a throughput perspective to enable a comprehensive view beyond a single headline number.
+            This approach is intended to highlight practical platform characteristics such as scalability, stability under load, and overall efficiency.
+          </p>
+          <div class="thin-line"></div>
+
+          {% if summary and summary.charts %}
+          <section class="summary-section">
+            <h2>RNGD vs RTX Pro 6000 — Performance Ratio (ISL/OSL {{ summary.scenario }})</h2>
+            <p>
+              Per-model performance of RNGD (latest furiosa-llm) relative to RTX Pro 6000 (latest vLLM),
+              broken down by concurrency for the {{ summary.scenario }} scenario. Bars are oriented so that
+              a taller bar always means RNGD is better: TPS/User and TPS/Watt are shown as RNGD / RTX Pro 6000,
+              while Median TTFT and Median TPOT are shown as RTX Pro 6000 / RNGD. The dashed line marks 90%.
+              Toggle individual models on or off by clicking their legend entries.
+            </p>
+            <div class="summary-charts">
+              {% for sc in summary.charts %}
+              <div class="graph-inner summary-chart">
+                {{ sc.html | safe }}
+              </div>
+              {% endfor %}
+            </div>
+            <div class="thin-line"></div>
+          </section>
+          {% endif %}
+
+          {% for item in items %}
+            <section class="model-section" data-model="{{ item.model }}">
+              {% for task in task_list %}
+                {% if task in item.content %}
+                {% for oc in item.content[task].charts %}
+                <div class="graph-container"
+                    data-model="{{ item.model }}"
+                    data-task="{{ task }}"
+                    data-tokens="{{ oc.tokens }}"
+                    style="display:none;">
+                  <div class="graph-inner">
+                    <h2>RNGD + furiosa-llm {{ version }} - {{ task }} Performance Overview</h2>
+                    <p>This graph shows the performance of the RNGD model for the {{ item.content[task].key }} = {{ oc.tokens }} configuration.</p>
+                    {{ oc.html[0] | safe }}
+                  </div>
+                  <div class="graph-inner">
+                    <h2>Comparison Graph RNGD / GPU - TPS/User and Concurrent Users</h2>
+                    <p>This graph shows the comparison of the RNGD model and the GPU model for the ISL/OSL = {{ oc.tokens }} configuration.</p>
+                    {{ oc.html[1] | safe }}
+                  </div>
+                  <div class="graph-inner">
+                    <h2>Rack Performance</h2>
+                    <p>This graph shows the performance of the RNGD model for the ISL/OSL = {{ oc.tokens }} configuration.</p>
+                    <div class="rack-layout">
+                      <div class="rack-plot">
+                        {{ oc.html[2] | safe }}
+                      </div>
+                      <div class="rack-power-inputs" data-model="{{ item.model }}" data-tokens="{{ oc.tokens }}">
+                        <div class="field" style="color: #ffffff;">
+                          <div class="panel-title">Insert values below to<br/>further explore</div>
+  
+                          <div id="power-inputs-{{ item.model }}-{{ oc.tokens }}" class="power-inputs">
+                            {% for d in oc.rack_inputs %}
+                            <div class="power-row">
+                              <input class="power-val"
+                                     type="number"
+                                     value="{{ d.value }}"
+                                     data-device="{{ d.name }}"
+                                     inputmode="numeric" />
+                              <span class="power-dot" style="--dot: {{ d.color }};"></span>
+                              <span class="power-label">{{ d.name }}</span>
+                            </div>
+                            {% endfor %}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="graph-inner">
+                    <h2>TTFT Performance</h2>
+                    <p>This graph shows the TTFT performance of the RNGD model for the {{ item.content[task].key }} = {{ oc.tokens }} configuration.</p>
+                    {{ oc.html[3] | safe }}
+                  </div>
+                  <div class="graph-inner">
+                    <h2>TPOT Performance</h2>
+                    <p>This graph shows the TPOT performance of the RNGD model for the {{ item.content[task].key }} = {{ oc.tokens }} configuration.</p>
+                    {{ oc.html[4] | safe }}
+                  </div>
+                  <div class="graph-inner">
+                    <h2>Power Efficiency</h2>
+                    <p>This graph shows the TPS/Watt of the RNGD model for the {{ item.content[task].key }} = {{ oc.tokens }} configuration.</p>
+                    {{ oc.html[5] | safe }}
+                  </div>
+                </div>
+                {% endfor %}
+                {% endif %}
+              {% endfor %}
+            </section>
+          {% endfor %}
+        </div>
+      </main>
+    </div>
+  </body>
+  <script>
+  const modelSelect = document.getElementById('model-select');
+  const taskSelect  = document.getElementById('task-select');
+
+  const modelTaskMap = {
+    {% for item in items %}
+    {{ item.model | tojson }}: {{ item.content.keys() | list | tojson }},
+    {% endfor %}
+  };
+
+  function updateTaskOptions() {
+    const m = modelSelect.value;
+    const availableTasks = modelTaskMap[m] || [];
+    const current = taskSelect.value;
+
+    taskSelect.innerHTML = '';
+    availableTasks.forEach(task => {
+      const opt = document.createElement('option');
+      opt.value = task;
+      opt.textContent = task;
+      taskSelect.appendChild(opt);
+    });
+
+    if (availableTasks.includes(current)) {
+      taskSelect.value = current;
+    }
+  }
+
+  function updateTokenFieldVisibility() {
+    const m = modelSelect.value;
+    const t = taskSelect.value;
+    const isOverview = (m === '__overview__');
+
+    const taskField = document.getElementById('task-field');
+    if (taskField) taskField.style.display = isOverview ? 'none' : '';
+
+    document.querySelectorAll('.token-field').forEach(div => {
+      const show = (!isOverview && div.dataset.model === m && div.dataset.task === t);
+      div.style.display = show ? '' : 'none';
+    });
+  }
+
+  modelSelect.addEventListener('change', () => {
+    updateTaskOptions();
+    updateTokenFieldVisibility();
+  });
+  taskSelect.addEventListener('change', updateTokenFieldVisibility);
+
+  updateTaskOptions();
+  updateTokenFieldVisibility();
+</script>
+</html>

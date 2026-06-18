@@ -225,8 +225,50 @@ Server logs are written to `./serve_logs/`.
 **Example path:**
 
 ```
-bench_space/RNGD_4_furiosa-llm_2026.2.0/vllm/offline/EXAONE-4.0-32B-FP8/summary_1k_1k.csv
+bench_space/RNGD_4_furiosa-llm/vllm/offline/EXAONE-4.0-32B-FP8/summary.csv
 ```
+
+---
+
+## Reports
+
+Turn one or more benchmark runs into a self-contained interactive HTML report:
+
+```bash
+furiosa-perf report \
+  --benchmark-result-path ./bench_space \
+  --model-list all \
+  --task-list all \
+  --report-path ./report
+```
+
+The command walks `--benchmark-result-path` for `<task>/<model>/summary.csv`
+files (the aggregate summaries written by `run`), and renders per-(ISL/OSL)
+charts — throughput table, interactive per-user curve, rack-level performance,
+TTFT/TPOT, and TPS/Watt — into `--report-path` (default `./report`). Open
+`report/index.html` in a browser. The raw CSVs are also bundled under
+`report/csv/` and indexed in `report/manifest.json`.
+
+The landing page opens with a **RNGD vs RTX Pro 6000** comparison: one bar chart
+per metric (TPS/User, TPS/Watt, Median TTFT, Median TPOT) for the 1024/1024
+scenario, broken down by concurrency. Bars are oriented so taller always means
+RNGD is better — TPS/User and TPS/Watt as RNGD / RTX Pro 6000, Median TTFT and
+Median TPOT as RTX Pro 6000 / RNGD — with a dashed 90% reference line. Each
+model is a separate bar you can toggle from the legend; models unsupported on
+RNGD simply show no bar. At each concurrency RNGD uses its best-performing device
+count and RTX Pro 6000 is matched to the device count closest to it (shown in the
+bar's hover tooltip). The comparison targets (scenario, hardware families,
+reference line, metrics) are configured in `furiosa_perf/reporting/theme.py`.
+
+### CLI options
+
+| Option | Required | Default | Description |
+|---|---|---|---|
+| `--benchmark-result-path` | ✓ | — | Root directory to scan for `summary.csv` results |
+| `--model-list` | | `all` | Comma-separated model names, or `all` |
+| `--task-list` | | `all` | Comma-separated task names, or `all` |
+| `--report-contents` | | — | Optional YAML overriding the report title/abstract/theme |
+| `--report-path` | | `./report` | Output directory for the generated report |
 
 ---
 

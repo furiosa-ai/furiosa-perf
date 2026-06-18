@@ -9,6 +9,7 @@ warnings.filterwarnings("ignore", message=".*doesn't match a supported version.*
 
 import click  # noqa: E402
 
+from furiosa_perf.cli.report import report  # noqa: E402
 from furiosa_perf.cli.run import run  # noqa: E402
 
 
@@ -18,6 +19,7 @@ def cli() -> None:
 
 
 cli.add_command(run)
+cli.add_command(report)
 
 if __name__ == "__main__":
     cli()
