@@ -23,6 +23,9 @@
             <label for="model-select" class="field-label"><p>&nbsp;&nbsp;Model Type</p></label>
             <div class="select-wrapper">
               <select id="model-select">
+                {% if summary and summary.charts %}
+                  <option value="__overview__">Overview</option>
+                {% endif %}
                 {% for model in model_list %}
                   <option value="{{ model }}">{{ model }}</option>
                 {% endfor %}
@@ -30,8 +33,8 @@
               <span class="select-arrow">▼</span>
             </div>
           </div>
-        
-          <div class="field">
+
+          <div class="field" id="task-field">
             <label for="task-select" class="field-label"><p>&nbsp;&nbsp;Task</p></label>
             <div class="select-wrapper">
               <select id="task-select">
@@ -220,9 +223,13 @@
   function updateTokenFieldVisibility() {
     const m = modelSelect.value;
     const t = taskSelect.value;
+    const isOverview = (m === '__overview__');
+
+    const taskField = document.getElementById('task-field');
+    if (taskField) taskField.style.display = isOverview ? 'none' : '';
 
     document.querySelectorAll('.token-field').forEach(div => {
-      const show = (div.dataset.model === m && div.dataset.task === t);
+      const show = (!isOverview && div.dataset.model === m && div.dataset.task === t);
       div.style.display = show ? '' : 'none';
     });
   }

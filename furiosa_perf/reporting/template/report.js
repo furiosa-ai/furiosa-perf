@@ -410,9 +410,22 @@
     const tokenSelect = currentTokenSelect();
     const tokens = tokenSelect ? tokenSelect.value : null;
 
-    document.querySelectorAll('.model-section').forEach((section) => {
-      section.style.display = (section.dataset.model === model) ? '' : 'none';
+    // "Overview" is a standalone initial page: show only the summary section and
+    // hide every model detail view.
+    const isOverview = (model === '__overview__');
+    document.querySelectorAll('.summary-section').forEach((sec) => {
+      sec.style.display = isOverview ? '' : 'none';
     });
+
+    document.querySelectorAll('.model-section').forEach((section) => {
+      section.style.display = (!isOverview && section.dataset.model === model) ? '' : 'none';
+    });
+
+    if (isOverview) {
+      document.querySelectorAll('.graph-container').forEach((group) => { group.style.display = 'none'; });
+      renderSummaryCharts();
+      return;
+    }
 
     document.querySelectorAll('.graph-container').forEach((group) => {
       const match = group.dataset.model === model

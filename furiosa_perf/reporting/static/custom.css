@@ -260,20 +260,15 @@ p{
 }
 .summary-charts{
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
+  grid-template-columns: 1fr;
+  gap: 32px;
 }
 .summary-chart{
   min-width: 0;
 }
 .summary-chart .js-plotly-plot{
   width: 100%;
-  height: 360px;
-}
-@media (max-width: 900px){
-  .summary-charts{
-    grid-template-columns: 1fr;
-  }
+  height: 560px;
 }
 
 
