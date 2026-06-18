@@ -249,6 +249,15 @@ TTFT/TPOT, and TPS/Watt — into `--report-path` (default `./report`). Open
 `report/index.html` in a browser. The raw CSVs are also bundled under
 `report/csv/` and indexed in `report/manifest.json`.
 
+The landing page opens with a **RNGD vs RTX Pro 6000** comparison: one bar chart
+per metric (TPS/User, TPS/Watt, Median TTFT, Median TPOT) for the 1024/1024
+scenario, broken down by concurrency. Bars are oriented so taller always means
+RNGD is better — TPS/User and TPS/Watt as RNGD / RTX Pro 6000, Median TTFT and
+Median TPOT as RTX Pro 6000 / RNGD — with a dashed 90% reference line. Each
+model is a separate bar you can toggle from the legend; models unsupported on
+RNGD simply show no bar. The comparison targets (scenario, hardware families,
+reference line, metrics) are configured in `furiosa_perf/reporting/theme.py`.
+
 ### CLI options
 
 | Option | Required | Default | Description |

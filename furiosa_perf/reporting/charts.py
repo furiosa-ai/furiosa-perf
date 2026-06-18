@@ -466,3 +466,97 @@ def plot_ttft_or_tpot_chart(df: pd.DataFrame, target_metric: str) -> go.Figure:
         bargap=0.3,
     )
     return entire_chart
+
+
+def plot_summary_ratio_bar_chart(
+    concurrents: list[int],
+    series_by_model: dict[str, dict[int, float]],
+    color_map: dict[str, str],
+    metric_label: str,
+    ratio_caption: str,
+    reference_ratio: float,
+) -> go.Figure:
+    """Build a grouped bar chart of RNGD-vs-GPU performance ratios.
+
+    The x-axis is concurrency (one group per level), each model is a separately
+    toggleable bar trace (click the legend to show/hide), and a dashed reference
+    line marks ``reference_ratio``. Concurrency levels with no value for a model
+    (e.g. unsupported on RNGD) simply render no bar.
+
+    Args:
+        concurrents (list[int]): Concurrency levels, in display order (x categories).
+        series_by_model (dict[str, dict[int, float]]): ``model -> {concurrency -> ratio}``.
+            Missing concurrencies are rendered as gaps.
+        color_map (dict[str, str]): ``model -> #RRGGBB`` bar color.
+        metric_label (str): Y-axis / chart title metric name (e.g. ``"TPS / User"``).
+        ratio_caption (str): Short caption describing the ratio direction
+            (e.g. ``"RNGD / RTX Pro 6000"``).
+        reference_ratio (float): Y value for the dashed reference line.
+
+    Returns:
+        go.Figure: The grouped bar figure.
+    """
+    x_labels = [str(c) for c in concurrents]
+    fig = go.Figure()
+    for model, by_conc in series_by_model.items():
+        ys = [by_conc.get(c) for c in concurrents]
+        if all(y is None for y in ys):
+            continue
+        fig.add_trace(
+            go.Bar(
+                name=model,
+                x=x_labels,
+                y=ys,
+                marker_color=color_map.get(model),
+                hovertemplate=f"{model}<br>Concurrent=%{{x}}<br>{metric_label}: %{{y:.2f}}x<extra></extra>",
+            )
+        )
+
+    fig.add_hline(
+        y=reference_ratio,
+        line_dash="dash",
+        line_color="rgba(255,255,255,0.7)",
+        line_width=2,
+        annotation_text=f"{reference_ratio:.0%}",
+        annotation_position="top right",
+        annotation_font_color="#ffffff",
+    )
+
+    fig.update_layout(
+        barmode="group",
+        title={"text": f"{metric_label}  ({ratio_caption})"},
+        plot_bgcolor="black",
+        paper_bgcolor="black",
+        font={"family": "Favorit-medium, system-ui", "color": "#ffffff", "size": 14},
+        margin={"l": 50, "r": 30, "t": 60, "b": 40},
+        legend={
+            "orientation": "h",
+            "entrywidthmode": "fraction",
+            "entrywidth": 0.22,
+            "x": 0.0,
+            "xanchor": "left",
+            "y": 1.04,
+            "yanchor": "bottom",
+            "font": {"family": "Favorit-medium, system-ui", "color": "#eeeeee", "size": 13},
+            "bgcolor": "rgba(0,0,0,0)",
+            "bordercolor": "rgba(0,0,0,0)",
+        },
+        bargap=0.3,
+        autosize=True,
+    )
+    fig.update_xaxes(
+        title_text="Concurrent",
+        type="category",
+        ticks="outside",
+        ticklen=5,
+        gridcolor="rgba(255,255,255,0.12)",
+    )
+    fig.update_yaxes(
+        title_text=f"{metric_label} ratio (×)",
+        rangemode="tozero",
+        gridcolor="rgba(255,255,255,0.12)",
+        ticks="outside",
+        ticklen=5,
+        zeroline=False,
+    )
+    return fig

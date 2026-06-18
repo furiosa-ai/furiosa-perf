@@ -16,11 +16,23 @@ from furiosa_perf.reporting.charts import (
     plot_interactive_user_chart,
     plot_line_chart,
     plot_rack_performance_chart,
+    plot_summary_ratio_bar_chart,
     plot_table_chart,
     plot_ttft_or_tpot_chart,
 )
 from furiosa_perf.reporting.schemas import BenchmarkMetricLoader
-from furiosa_perf.reporting.theme import TABLE_COLUMNS
+from furiosa_perf.reporting.theme import (
+    SUMMARY_GPU_BACKEND,
+    SUMMARY_GPU_FAMILY,
+    SUMMARY_METRICS,
+    SUMMARY_NPU_BACKEND,
+    SUMMARY_NPU_FAMILY,
+    SUMMARY_REFERENCE_RATIO,
+    SUMMARY_SCENARIO_ISL_OSL,
+    TABLE_COLUMNS,
+    _device_family,
+    build_model_color_map,
+)
 
 
 def fig_to_lazy_html(fig: go.Figure, div_id: str, config: dict[str, Any] | None = None) -> str:
@@ -133,6 +145,7 @@ def collect_and_build_report_html(
         "title": f"{target_model} Performance Analysis",
         "content": {f"{task}": {"charts": report_charts, "key": "ISL / OSL"}},
         "version": latest_furiosa_version,
+        "dataframe": total_df,
     }
     return report_contents
 
@@ -158,6 +171,118 @@ def save_report_html(report_contents: dict[str, Any], manifest_data: list[dict[s
     with (report_path / "manifest.json").open("w") as f:
         json.dump(manifest_data, f)
     click.echo(f"Report generated successfully in {report_path}.")
+
+
+def _latest_backend_rows(model_df: pd.DataFrame, family: str, backend: str) -> pd.DataFrame:
+    """Rows for one hardware family + backend, restricted to its newest version.
+
+    Args:
+        model_df (pd.DataFrame): Rows for a single model (already scenario-filtered).
+        family (str): Hardware family key (e.g. ``"RNGD"`` or ``"RTX"``).
+        backend (str): Serving backend (e.g. ``"furiosa-llm"`` or ``"vllm"``).
+
+    Returns:
+        pd.DataFrame: The subset of ``model_df`` matching ``family``/``backend`` whose
+        ``version`` equals the lexicographically largest version present (mirrors how
+        the per-model report picks the latest furiosa-llm build). Empty if none match.
+    """
+    sub = model_df[(model_df["family"] == family) & (model_df["backend"] == backend)]
+    if sub.empty:
+        return sub
+    return sub[sub["version"] == sub["version"].max()]
+
+
+def _agg_per_concurrency(sub: pd.DataFrame, column: str, better: str) -> dict[int, float]:
+    """Reduce repeated configs at each concurrency to a single best value.
+
+    Args:
+        sub (pd.DataFrame): Rows for one model+device (latest version).
+        column (str): Metric column to read.
+        better (str): ``"high"`` (throughput-like; keep the max) or ``"low"``
+            (latency-like; keep the min).
+
+    Returns:
+        dict[int, float]: ``concurrency -> value`` with zero/NaN values dropped (they
+        cannot be used as a ratio numerator or denominator).
+    """
+    if sub.empty or column not in sub.columns:
+        return {}
+    grouped = sub.dropna(subset=[column]).groupby("Concurrent")[column]
+    reduced = grouped.max() if better == "high" else grouped.min()
+    return {int(c): float(v) for c, v in reduced.items() if pd.notna(v) and v != 0}
+
+
+def build_summary_charts(frames: list[pd.DataFrame]) -> list[dict[str, Any]]:
+    """Build the landing-page RNGD-vs-GPU performance-ratio bar charts.
+
+    For the configured ISL/OSL scenario, one bar chart is produced per metric in
+    :data:`SUMMARY_METRICS`, with concurrency on the x-axis and one toggleable bar
+    per model. A concurrency contributes a bar only when *both* the NPU (latest
+    furiosa-llm) and the GPU (latest vLLM) measured it; models unsupported on RNGD
+    therefore render no bar at that point.
+
+    Args:
+        frames (list[pd.DataFrame]): Per-(model, task) frames from
+            :func:`collect_and_build_report_html`, each tagged with a ``model`` column.
+
+    Returns:
+        list[dict[str, Any]]: ``{"title", "caption", "html"}`` per metric chart;
+        empty when the scenario produced no comparable data.
+    """
+    if not frames:
+        return []
+    df = pd.concat(frames, ignore_index=True)
+    isl, osl = SUMMARY_SCENARIO_ISL_OSL
+    df = df[(df["ISL"] == isl) & (df["OSL"] == osl)].copy()
+    if df.empty:
+        return []
+
+    df["family"] = df["hardware"].map(_device_family)
+    models = sorted(df["model"].unique())
+    color_map = build_model_color_map(models)
+
+    charts: list[dict[str, Any]] = []
+    for metric in SUMMARY_METRICS:
+        column, better, direction = metric["column"], metric["better"], metric["ratio"]
+        series_by_model: dict[str, dict[int, float]] = {}
+        concurrency_set: set[int] = set()
+
+        for model in models:
+            mdf = df[df["model"] == model]
+            npu = _agg_per_concurrency(
+                _latest_backend_rows(mdf, SUMMARY_NPU_FAMILY, SUMMARY_NPU_BACKEND), column, better
+            )
+            gpu = _agg_per_concurrency(
+                _latest_backend_rows(mdf, SUMMARY_GPU_FAMILY, SUMMARY_GPU_BACKEND), column, better
+            )
+            ratios = {
+                c: round(npu[c] / gpu[c], 2) if direction == "npu/gpu" else round(gpu[c] / npu[c], 2)
+                for c in sorted(set(npu) & set(gpu))
+            }
+            if ratios:
+                series_by_model[model] = ratios
+                concurrency_set.update(ratios)
+
+        if not series_by_model:
+            continue
+
+        caption = "RNGD / RTX Pro 6000" if direction == "npu/gpu" else "RTX Pro 6000 / RNGD"
+        fig = plot_summary_ratio_bar_chart(
+            sorted(concurrency_set),
+            series_by_model,
+            color_map,
+            metric["label"],
+            caption,
+            SUMMARY_REFERENCE_RATIO,
+        )
+        charts.append(
+            {
+                "title": metric["label"],
+                "caption": caption,
+                "html": fig_to_lazy_html(fig, f"summary-{metric['key']}", config={"responsive": True}),
+            }
+        )
+    return charts
 
 
 @click.command()
@@ -224,6 +349,7 @@ def report(
 
     model_items: dict[str, dict[str, Any]] = {}
     manifest_data = []
+    summary_frames: list[pd.DataFrame] = []
     for model in models:
         for task in tasks:
             raw_data_files = list(Path(benchmark_result_path).rglob(f"{task}/{model}/summary.csv"))
@@ -232,6 +358,10 @@ def report(
                 continue
             print(raw_data_files)
             task_report = collect_and_build_report_html(raw_data_files, model, task)
+
+            frame = task_report["dataframe"].copy()
+            frame["model"] = model
+            summary_frames.append(frame)
 
             if model not in model_items:
                 model_items[model] = {
@@ -278,5 +408,11 @@ def report(
             "items": items,
             "theme": "dark",
         }
+
+    isl, osl = SUMMARY_SCENARIO_ISL_OSL
+    contents["summary"] = {
+        "scenario": f"{isl}/{osl}",
+        "charts": build_summary_charts(summary_frames),
+    }
 
     save_report_html(contents, manifest_data, out_dir)

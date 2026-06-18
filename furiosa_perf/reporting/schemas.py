@@ -65,11 +65,16 @@ class BenchmarkMetricLoader:
                 "TPS/Watt": (col("output_throughput") / col("mean_power", np.nan)).round(2).fillna(0),
                 "TTFT(s)": (col("mean_ttft")).round(2),
                 "P99_TTFT(s)": (col("p99_ttft")).round(2),
+                "Median_TTFT(s)": (col("median_ttft")).round(2),
                 "TPOT(ms)": (col("mean_tpot")).round(2),
                 "P99_TPOT(ms)": (col("p99_tpot")).round(2),
+                "Median_TPOT(ms)": (col("median_tpot")).round(2),
                 "E2EL(s)": (col("mean_e2el")).round(2),
                 "Power(w)": col("mean_power", 0.0),
                 "device": f"{device}x{num}+{backend}_{version}",
+                "hardware": device,
+                "backend": backend,
+                "version": version,
             }
         )
         return new_df

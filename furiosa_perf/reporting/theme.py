@@ -137,3 +137,63 @@ SERVER_POWER_CONSUMPTION = {
     "RTX-PRO-6000": 6600,
     "H200": 5000,
 }
+
+
+# ----------------------------------------------------------------------------
+# Landing-page summary (RNGD vs RTX Pro 6000 performance-ratio bar charts)
+# ----------------------------------------------------------------------------
+
+# The summary compares the NPU (RNGD, latest furiosa-llm) against the GPU
+# (RTX Pro 6000, latest vLLM) for a single ISL/OSL scenario, broken down by
+# concurrency. Tune these to retarget the comparison.
+SUMMARY_SCENARIO_ISL_OSL = (1024, 1024)
+SUMMARY_NPU_FAMILY = "RNGD"
+SUMMARY_NPU_BACKEND = "furiosa-llm"
+SUMMARY_GPU_FAMILY = "RTX"
+SUMMARY_GPU_BACKEND = "vllm"
+
+# Horizontal dashed reference line drawn on every summary chart (0.9 == 90%).
+SUMMARY_REFERENCE_RATIO = 0.9
+
+# One bar chart per entry. ``ratio`` is "npu/gpu" or "gpu/npu" so that a taller
+# bar always means "RNGD is better"; ``better`` is the direction of the raw
+# metric and decides how repeated configs at one concurrency are reduced
+# (best throughput = max, best latency = min).
+SUMMARY_METRICS = [
+    {"key": "tps_user", "label": "TPS / User", "column": "TPS/User", "better": "high", "ratio": "npu/gpu"},
+    {
+        "key": "tps_watt",
+        "label": "TPS / Watt (Power Efficiency)",
+        "column": "TPS/Watt",
+        "better": "high",
+        "ratio": "npu/gpu",
+    },
+    {"key": "median_ttft", "label": "Median TTFT", "column": "Median_TTFT(s)", "better": "low", "ratio": "gpu/npu"},
+    {"key": "median_tpot", "label": "Median TPOT", "column": "Median_TPOT(ms)", "better": "low", "ratio": "gpu/npu"},
+]
+
+# Qualitative palette cycled across models in the summary charts.
+MODEL_COLOR_PALETTE = [
+    "#FF5A5F",
+    "#3D9BFF",
+    "#FFB400",
+    "#22C55E",
+    "#A855F7",
+    "#14B8A6",
+    "#F97316",
+    "#EC4899",
+    "#64748B",
+    "#84CC16",
+]
+
+
+def build_model_color_map(models: list[str]) -> dict[str, str]:
+    """Assign each model a stable color by cycling :data:`MODEL_COLOR_PALETTE`.
+
+    Args:
+        models (list[str]): Model names to color (order defines color assignment).
+
+    Returns:
+        dict[str, str]: Mapping from model name to a ``#RRGGBB`` hex color.
+    """
+    return {model: MODEL_COLOR_PALETTE[i % len(MODEL_COLOR_PALETTE)] for i, model in enumerate(models)}

@@ -95,6 +95,27 @@
           </p>
           <div class="thin-line"></div>
 
+          {% if summary and summary.charts %}
+          <section class="summary-section">
+            <h2>RNGD vs RTX Pro 6000 — Performance Ratio (ISL/OSL {{ summary.scenario }})</h2>
+            <p>
+              Per-model performance of RNGD (latest furiosa-llm) relative to RTX Pro 6000 (latest vLLM),
+              broken down by concurrency for the {{ summary.scenario }} scenario. Bars are oriented so that
+              a taller bar always means RNGD is better: TPS/User and TPS/Watt are shown as RNGD / RTX Pro 6000,
+              while Median TTFT and Median TPOT are shown as RTX Pro 6000 / RNGD. The dashed line marks 90%.
+              Toggle individual models on or off by clicking their legend entries.
+            </p>
+            <div class="summary-charts">
+              {% for sc in summary.charts %}
+              <div class="graph-inner summary-chart">
+                {{ sc.html | safe }}
+              </div>
+              {% endfor %}
+            </div>
+            <div class="thin-line"></div>
+          </section>
+          {% endif %}
+
           {% for item in items %}
             <section class="model-section" data-model="{{ item.model }}">
               {% for task in task_list %}

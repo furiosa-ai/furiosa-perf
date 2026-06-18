@@ -423,6 +423,19 @@
     });
   }
 
+  // Landing summary charts live outside the model navigation, so render them
+  // eagerly on load and keep them sized to their container.
+  function renderSummaryCharts() {
+    const sections = document.querySelectorAll('.summary-section');
+    sections.forEach((section) => {
+      Array.from(section.querySelectorAll('.lazy-plot')).forEach((div) => {
+        renderLazyPlot(div).then((el) => {
+          if (el) { try { Plotly.Plots.resize(el); } catch (_) {} }
+        });
+      });
+    });
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
     const modelSelect = document.getElementById('model-select');
     const taskSelect = document.getElementById('task-select');
@@ -433,6 +446,7 @@
       sel.addEventListener('change', showSelectedGraph);
     });
 
+    renderSummaryCharts();
     showSelectedGraph();
   });
 
