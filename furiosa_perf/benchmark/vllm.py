@@ -1,21 +1,37 @@
 """vLLM-based performance benchmark implementation."""
 
+import json
 import os
+import re
 import signal
 import subprocess
 from collections import defaultdict
 from dataclasses import asdict
 from datetime import UTC, datetime
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from pytablewriter import MarkdownTableWriter
 
+from furiosa_perf.benchmark.multi_turn_input import build_multi_turn_input
 from furiosa_perf.runner.monitor import HardwareMonitor
 from furiosa_perf.utils.config import PerformanceBenchConfig, ScenarioConfig
 from furiosa_perf.utils.logger import logger
 
 WORKSPACE = "./bench_space"
+
+# Extra Python deps the vendored multi-turn benchmark needs in the tool venv
+# (on top of ``vllm``). Kept as version floors so uv resolves them against vllm's pins.
+MULTI_TURN_DEPS = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "aiohttp>=3.10",
+    "transformers>=4.46",
+    "xlsxwriter>=3.2.1",
+    "tqdm>=4.66",
+]
 
 
 class VllmPerformanceBenchmark:
@@ -121,6 +137,14 @@ class VllmPerformanceBenchmark:
         self.venv_dir = self.base_dir / f".{self.name}"
         self.python_exe = (self.venv_dir / "bin" / "python").absolute()
 
+        # Vendored multi-turn benchmark lives inside the package; resolve its on-disk
+        # location so the tool venv can run it (its modules import as flat siblings).
+        self._mt_script_dir: Path | None = None
+        self._mt_text_file: Path | None = None
+        if self.task == "multi_turn":
+            self._mt_script_dir = Path(str(resources.files("furiosa_perf.vendor.multi_turn")))
+            self._mt_text_file = self._mt_script_dir / "data" / "pg1184.txt"
+
         self.SETUP_COMMANDS = self._build_setup_commands()
         self.BASE_COMMAND = [arg.replace("{exe}", str(self.python_exe)) for arg in self.COMMAND]
         self.log_init()
@@ -142,9 +166,14 @@ class VllmPerformanceBenchmark:
             "python_exe": self.python_exe,
             "venv_dir": str(self.venv_dir),
         }
+        setup_commands = list(self.ENV["SETUP_COMMANDS"])
+        if self.task == "multi_turn":
+            setup_commands.append(
+                ("install_multiturn_deps", ["uv", "pip", "install", "--python", "{python_exe}", *MULTI_TURN_DEPS])
+            )
         return [
             (key, [arg.format(**fmt) for arg in arg_list])
-            for key, arg_list in self.ENV["SETUP_COMMANDS"]
+            for key, arg_list in setup_commands
         ]
 
     def start_info(self) -> None:
@@ -172,6 +201,14 @@ class VllmPerformanceBenchmark:
             if step_name == "install_package" and (self.venv_dir / "bin" / "vllm").exists():
                 logger.info(f"Skipping {step_name} — vllm already installed at {self.venv_dir}.")
                 continue
+            if step_name == "install_multiturn_deps" and self.python_exe.exists():
+                check = subprocess.run(
+                    [str(self.python_exe), "-c", "import aiohttp, pandas, tqdm, transformers, xlsxwriter"],
+                    capture_output=True,
+                )
+                if check.returncode == 0:
+                    logger.info(f"Skipping {step_name} — multi-turn deps already present.")
+                    continue
             p = subprocess.run(command, capture_output=True, text=True)
             if p.returncode != 0:
                 raise RuntimeError(f"Setup step {step_name!r} failed: {p.stderr}")
@@ -196,6 +233,9 @@ class VllmPerformanceBenchmark:
         * ``reranker`` → ``"<isl>.b<batch>.<concurrency>"``
         * ``embeddings`` → ``"<isl>.<concurrency>"``
         """
+        if self.task == "multi_turn":
+            # max_concurrency is reused as the client count for multi_turn.
+            return f"nc{scenario.max_concurrency}.conv{scenario.num_conversations}"
         parts = [str(scenario.input_tokens)]
         if hasattr(scenario, "output_tokens"):
             parts.append(str(scenario.output_tokens))
@@ -228,12 +268,59 @@ class VllmPerformanceBenchmark:
         Returns:
             List of strings ready to pass to :class:`subprocess.Popen`.
         """
+        if self.task == "multi_turn":
+            return self._get_multi_turn_command(scenario)
         fmt = self._get_format_args(scenario)
         command = [arg.format(**fmt) for arg in (self.BASE_COMMAND + self.VLLM_COMMANDS[self.task])]
         if self.host:
             command.append(f"--host={self.host}")
         if self.port:
             command.append(f"--port={self.port}")
+        return command
+
+    def _get_multi_turn_command(self, scenario: ScenarioConfig) -> list[str]:
+        """Build the argv for the vendored multi-turn benchmark client.
+
+        Assembles the ``generate_multi_turn.json`` input from the scenario, writes it
+        into the scenario's result directory, and returns the command to run the
+        vendored ``benchmark_serving_multi_turn.py`` in the tool venv.
+
+        Args:
+            scenario: A :class:`MultiTurnScenarioConfig` (``max_concurrency`` == the
+                number of parallel clients).
+
+        Returns:
+            List of strings ready to pass to :class:`subprocess.Popen`.
+        """
+        assert self._mt_script_dir is not None and self._mt_text_file is not None
+        result_dir = self.get_vllm_result_dir(self._scenario_result_name(scenario))
+        input_path = result_dir / "generate_multi_turn.json"
+        doc = build_multi_turn_input(scenario, self._mt_text_file)
+        input_path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+        command = [
+            str(self.python_exe),
+            str(self._mt_script_dir / "benchmark_serving_multi_turn.py"),
+            f"--model={self.model}",
+            f"--url=http://{self.host}:{self.port}",
+            f"--input-file={input_path}",
+            f"--num-clients={scenario.max_concurrency}",
+            f"--max-active-conversations={scenario.max_active_conversations}",
+            f"--request-rate={scenario.request_rate}",
+            f"--seed={scenario.seed}",
+            f"--warmup-percentages={scenario.warmup_percentages}",
+            f"--stats-json-output={result_dir / 'stats.json'}",
+            "--excel-output",
+        ]
+        if scenario.limit_min_tokens >= 1 and scenario.limit_max_tokens >= 1:
+            command += [
+                f"--limit-min-tokens={scenario.limit_min_tokens}",
+                f"--limit-max-tokens={scenario.limit_max_tokens}",
+            ]
+        if scenario.max_num_requests is not None:
+            command.append(f"--max-num-requests={scenario.max_num_requests}")
+        if scenario.trust_remote_code:
+            command.append("--trust-remote-code")
         return command
 
     def run(self) -> None:
@@ -272,6 +359,12 @@ class VllmPerformanceBenchmark:
         env = os.environ.copy()
         if hf_token := self.env.get("HF_TOKEN"):
              env["HF_TOKEN"] = hf_token
+        if self.task == "multi_turn":
+            # The vendored scripts import each other as flat siblings, and the tool
+            # writes its timestamped xlsx into cwd — run inside the result dir with the
+            # vendored dir on PYTHONPATH so imports resolve and outputs land together.
+            cwd = self.get_vllm_result_dir(self._scenario_result_name(scenario))
+            env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(self._mt_script_dir), env.get("PYTHONPATH", "")]))
         self.bench_process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
@@ -320,6 +413,8 @@ class VllmPerformanceBenchmark:
         Returns:
             Dict of metric name → value, keyed with display-friendly names.
         """
+        if self.task == "multi_turn":
+            return self._parse_multi_turn_results(stdout, scenario)
         results: dict[str, Any] = {
             "Input Tokens": scenario.input_tokens,
             "Output Tokens": self._scenario_output_tokens(scenario),
@@ -343,12 +438,87 @@ class VllmPerformanceBenchmark:
                 results[f"{metric.title()} E2EL(s)"] = round(float(score) / 1000.0, 2)
         return results
 
+    def _parse_multi_turn_results(self, stdout: str, scenario: ScenarioConfig) -> dict[str, Any]:
+        """Aggregate the multi-turn tool's per-request ``stats.json`` into one row.
+
+        Reads the ``stats.json`` array written by the vendored benchmark, computes
+        latency-metric percentiles, and scrapes the aggregate throughput lines from
+        stdout (recomputing from timestamps if the scrape fails).
+
+        Args:
+            stdout: Captured subprocess stdout (may contain ANSI color codes).
+            scenario: The multi-turn scenario just executed.
+
+        Returns:
+            Dict of column name → value for one ``multiturn_summary.csv`` row.
+        """
+        result_dir = self.get_vllm_result_dir(self._scenario_result_name(scenario))
+        stats_path = result_dir / "stats.json"
+        records: list[dict[str, Any]] = []
+        if stats_path.exists():
+            records = json.loads(stats_path.read_text())
+
+        def _arr(key: str, keep_negative: bool = True) -> np.ndarray:
+            vals = [r[key] for r in records if r.get(key) is not None and (keep_negative or r[key] >= 0)]
+            return np.asarray(vals, dtype=float)
+
+        ttft = _arr("ttft_ms", keep_negative=False)  # -1 marks "no first token"
+        tpot = _arr("tpot_ms")
+        latency = _arr("latency_ms")
+        input_toks = _arr("input_num_tokens")
+        output_toks = _arr("output_num_tokens")
+
+        def _p(arr: np.ndarray, pct: float, scale: float = 1.0, ndigits: int = 3) -> float:
+            return round(float(np.percentile(arr, pct)) * scale, ndigits) if arr.size else 0.0
+
+        # Aggregate throughput is stdout-only; strip ANSI then scrape, else recompute.
+        clean = re.sub(r"\x1b\[[0-9;]*m", "", stdout)
+        rps_match = re.search(r"requests per second:\s*([\d.]+)", clean)
+        runtime_match = re.search(r"benchmark runtime:\s*([\d.]+)\s*sec", clean)
+        runtime_sec = float(runtime_match.group(1)) if runtime_match else 0.0
+        if rps_match:
+            requests_per_sec = float(rps_match.group(1))
+        elif records:
+            starts = _arr("start_time_ms")
+            span_sec = (float(starts.max()) + float(latency.max()) - float(starts.min())) / 1000.0 if starts.size else 0.0
+            requests_per_sec = round(len(records) / span_sec, 3) if span_sec > 0 else 0.0
+            runtime_sec = runtime_sec or round(span_sec, 3)
+        else:
+            requests_per_sec = 0.0
+
+        return {
+            # keys consumed by the power-summary merge / display parity
+            "Input Tokens": int(round(float(input_toks.mean()))) if input_toks.size else 0,
+            "Output Tokens": int(round(float(output_toks.mean()))) if output_toks.size else 0,
+            "Concurrent": scenario.max_concurrency,
+            # multi-turn specific columns
+            "Num Clients": scenario.max_concurrency,
+            "Max Active Conv": scenario.max_active_conversations,
+            "Num Conversations": scenario.num_conversations,
+            "Requests": len(records),
+            "Requests/sec": requests_per_sec,
+            "Runtime(s)": runtime_sec,
+            "Mean TTFT(s)": round(float(ttft.mean()) / 1000.0, 3) if ttft.size else 0.0,
+            "P50 TTFT(s)": _p(ttft, 50, scale=1 / 1000.0),
+            "P90 TTFT(s)": _p(ttft, 90, scale=1 / 1000.0),
+            "P99 TTFT(s)": _p(ttft, 99, scale=1 / 1000.0),
+            "P50 TPOT(ms)": _p(tpot, 50),
+            "P90 TPOT(ms)": _p(tpot, 90),
+            "P99 TPOT(ms)": _p(tpot, 99),
+            "P50 Latency(s)": _p(latency, 50, scale=1 / 1000.0),
+            "P90 Latency(s)": _p(latency, 90, scale=1 / 1000.0),
+            "P99 Latency(s)": _p(latency, 99, scale=1 / 1000.0),
+        }
+
     def finish_info(self, desc: str = "") -> None:
         """Write Markdown and CSV summary files for all scenario results.
 
         Args:
             desc: Prefix text prepended to the auto-generated report description.
         """
+        if self.task == "multi_turn":
+            self._finish_info_multiturn(desc)
+            return
         scenario_results = self.total_results["results"]
         report_desc = self._build_report_desc(desc)
         headers = self._prepare_result_headers(scenario_results)
@@ -367,6 +537,35 @@ class VllmPerformanceBenchmark:
             )
 
         self._write_summary_files(self.get_vllm_result_dir(""), headers, total_rows, report_desc, suffix="")
+
+    def _finish_info_multiturn(self, desc: str) -> None:
+        """Write the multi-turn roll-up as ``multiturn_summary.csv`` / ``.md``.
+
+        Deliberately named differently from ``summary.csv`` so ``furiosa-perf report``
+        (which globs ``*/summary.csv``) never picks up multi-turn results.
+
+        Args:
+            desc: Prefix text prepended to the auto-generated report description.
+        """
+        scenario_results = self.total_results["results"]
+        if not scenario_results:
+            logger.warning("No multi_turn results to summarise.")
+            return
+        report_desc = self._build_report_desc(desc)
+        headers = list(scenario_results[0].keys())
+        rows = [list(r.values()) for r in scenario_results]
+
+        md_writer = MarkdownTableWriter()
+        md_writer.headers = headers
+        md_writer.value_matrix = rows
+        logger.info("\n".join([report_desc, md_writer.dumps()]))
+
+        out_dir = self.get_vllm_result_dir("")
+        csv_lines = [",".join(headers)] + [",".join(str(v) for v in row) for row in rows]
+        with Path.open(out_dir / "multiturn_summary.md", "w") as f:
+            f.write(report_desc + "\n" + md_writer.dumps() + "\n")
+        with Path.open(out_dir / "multiturn_summary.csv", "w") as f:
+            f.write(report_desc + "\n" + "\n".join(csv_lines) + "\n")
 
     def _build_report_desc(self, prefix: str) -> str:
         """Build the human-readable description block prepended to summary files.

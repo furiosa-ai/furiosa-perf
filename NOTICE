@@ -1,0 +1,22 @@
+furiosa-perf
+Copyright 2026 Furiosa AI Inc.
+
+This product includes software developed at the vLLM project
+(https://github.com/vllm-project/vllm), licensed under the Apache License,
+Version 2.0.
+
+The following files under furiosa_perf/vendor/multi_turn/ are derived from
+vLLM's benchmarks/multi_turn/ directory (commit
+320c52b1342ad961091bb3333b867c0899907b06), and retain their original
+"SPDX-License-Identifier: Apache-2.0" / "Copyright contributors to the vLLM
+project" headers:
+
+  - benchmark_serving_multi_turn.py
+  - bench_dataset.py
+  - bench_utils.py
+  - requirements.txt
+
+data/pg1184.txt is Project Gutenberg eBook #1184 (public domain), used as a
+token-source corpus for synthetic conversation generation.
+
+See furiosa_perf/vendor/multi_turn/README.md for provenance details.

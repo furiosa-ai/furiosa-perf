@@ -63,6 +63,7 @@ dev = [
 [tool.mypy]
 packages = ["furiosa_perf"]
 python_version = "3.12"
+exclude = ["furiosa_perf/vendor/"]
 ignore_missing_imports = true
 strict = true
 warn_unused_ignores = true
@@ -82,6 +83,8 @@ style = "google"
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+# Vendored third-party code (vLLM multi-turn bench) is kept verbatim — do not lint it.
+extend-exclude = ["furiosa_perf/vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "S", "NPY", "PTH"]

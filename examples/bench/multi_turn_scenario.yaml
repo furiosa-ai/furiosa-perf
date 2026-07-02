@@ -1,0 +1,53 @@
+# Multi-turn conversational benchmark (vendored vLLM multi-turn bench).
+#
+# The whole synthetic-conversation workload is described inline below — furiosa-perf
+# assembles the tool's generate_multi_turn.json at run time. Shape fields accept a
+# scalar (constant) or a distribution dict, e.g.
+#   num_turns: {distribution: uniform, min: 24, max: 40}
+#
+# NOTE: `max_concurrency` is reused as the swept **number of parallel clients**
+# (the multi-turn tool has no --max-concurrency). A list expands to one run per value.
+#
+# Per-model "max" knobs:
+#   limit_min_tokens / limit_max_tokens  -> output-token cap (set both, or omit both)
+#   max_active_conversations             -> concurrency cap
+#   max_input_context_tokens             -> clamp the workload to a model's context window
+name: vllm
+task: multi_turn
+
+scenarios:
+  # coding-agent "long_tool_32k" shape, sweeping client concurrency
+  - max_concurrency: [1, 4, 8, 16]      # == num_clients (swept)
+    num_conversations: 64
+    max_active_conversations: 16
+    num_turns: 32
+    prefix_num_tokens: 11264
+    input_num_tokens: 1024
+    output_num_tokens: 256
+    limit_min_tokens: 256
+    limit_max_tokens: 256
+    max_input_context_tokens: 32768
+    warmup_percentages: "10%"
+    trust_remote_code: true
+
+  # "tool_heavy_64k" shape
+  - max_concurrency: [1, 8]
+    num_conversations: 32
+    num_turns: 16
+    prefix_num_tokens: 22528
+    input_num_tokens: 2048
+    output_num_tokens: 512
+    limit_min_tokens: 512
+    limit_max_tokens: 512
+    max_input_context_tokens: 65536
+
+  # "long_tool_128k" shape (clamped per model via max_input_context_tokens)
+  - max_concurrency: [1, 4]
+    num_conversations: 24
+    num_turns: 128
+    prefix_num_tokens: 45056
+    input_num_tokens: 1024
+    output_num_tokens: 256
+    limit_min_tokens: 256
+    limit_max_tokens: 256
+    max_input_context_tokens: 131072

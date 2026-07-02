@@ -197,8 +197,79 @@ class EmbeddingScenarioConfig(BaseScenarioConfig):
                 self.num_prompts = self.max_concurrency * 3
 
 
+@dataclass
+class MultiTurnScenarioConfig(BaseScenarioConfig):
+    """Scenario config for the ``multi_turn`` task (vendored vLLM multi-turn bench).
+
+    The whole synthetic-conversation workload is described inline here (there are no
+    separate ``generate_multi_turn.json`` files); :func:`build_multi_turn_input`
+    assembles the tool's input document from these fields at run time.
+
+    Each *shape* field accepts either a scalar (interpreted as a ``constant``
+    distribution) or a dict describing a full distribution supported by the vendored
+    ``bench_dataset`` (``uniform`` / ``lognormal`` / ``zipf`` / ``poisson``).
+
+    Note:
+        The inherited ``max_concurrency`` field is reused as the swept **number of
+        parallel clients** (``--num-clients``); the multi-turn tool has no
+        ``--max-concurrency``. A ``max_concurrency`` list in YAML therefore expands to
+        one scenario per client count via the shared loader logic.
+    """
+
+    # --- workload shape (scalar => constant distribution; dict => full distribution) ---
+    num_turns: int | dict = 32
+    prefix_num_tokens: int | dict = 11264  # per-conversation unique prefix (initial context)
+    input_num_tokens: int | dict = 1024  # tokens per user turn
+    output_num_tokens: int | dict = 256  # tokens per assistant turn (prompt_output)
+    common_prefix_num_tokens: int | dict | None = None  # optional shared (cacheable) prefix
+
+    # --- conversation volume + concurrency (knob b) ---
+    num_conversations: int = 64
+    max_active_conversations: int | None = None  # None => defaults to num_clients (== max_concurrency)
+
+    # --- output-token cap (knob a); < 1 disables (use generated output length) ---
+    limit_min_tokens: int = -1
+    limit_max_tokens: int = -1
+
+    # --- input-context cap (knob c); None => no clamp ---
+    max_input_context_tokens: int | None = None
+
+    # --- run controls ---
+    request_rate: int | str = 0  # per-client requests/sec (0 = no delay); overrides base "inf"
+    seed: int = 0
+    warmup_percentages: str = "0%"
+    max_num_requests: int | None = None
+    trust_remote_code: bool = True
+
+    def __post_init__(self) -> None:
+        """Fill concurrency defaults and validate the multi-turn invariants.
+
+        Raises:
+            ValueError: If the output-token limits are set inconsistently (only one
+                side, or ``min > max``).
+        """
+        if self.max_active_conversations is None:
+            self.max_active_conversations = self.max_concurrency  # = num_clients
+        # The tool asserts num_conversations >= num_clients and
+        # max_active_conversations <= num_conversations; keep the pool large enough.
+        self.num_conversations = max(
+            self.num_conversations, self.max_concurrency, self.max_active_conversations
+        )
+        # Mirror the tool's paired-limit rule (both >= 1, or both disabled).
+        if (self.limit_min_tokens >= 1) ^ (self.limit_max_tokens >= 1):
+            raise ValueError("limit_min_tokens and limit_max_tokens must both be set (>=1) or both disabled")
+        if self.limit_min_tokens >= 1 and self.limit_min_tokens > self.limit_max_tokens:
+            raise ValueError("limit_min_tokens must be <= limit_max_tokens")
+        if self.num_prompts is None:
+            self.num_prompts = self.num_conversations
+
+
 type ScenarioConfig = (
-    LLMScenarioConfig | VLScenarioConfig | RerankerScenarioConfig | EmbeddingScenarioConfig
+    LLMScenarioConfig
+    | VLScenarioConfig
+    | RerankerScenarioConfig
+    | EmbeddingScenarioConfig
+    | MultiTurnScenarioConfig
 )
 
 
@@ -222,6 +293,7 @@ class PerformanceBenchConfigLoader:
         "vl-offline": VLScenarioConfig,
         "reranker": RerankerScenarioConfig,
         "embeddings": EmbeddingScenarioConfig,
+        "multi_turn": MultiTurnScenarioConfig,
     }
 
     @classmethod
