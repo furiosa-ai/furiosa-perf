@@ -176,6 +176,34 @@ class VllmPerformanceBenchmark:
             if p.returncode != 0:
                 raise RuntimeError(f"Setup step {step_name!r} failed: {p.stderr}")
 
+    @staticmethod
+    def _scenario_output_tokens(scenario: ScenarioConfig) -> int:
+        """Output-token count for a scenario, or ``0`` for tasks that don't generate.
+
+        ``reranker`` and ``embeddings`` produce no output tokens, so their scenario
+        configs omit the field entirely; treat those as ``0``.
+        """
+        return getattr(scenario, "output_tokens", 0)
+
+    def _scenario_result_name(self, scenario: ScenarioConfig) -> str:
+        """Unique per-scenario result sub-directory name.
+
+        The generative tasks vary output length, reranker varies batch size, and
+        embeddings vary neither — so the middle component is task-dependent to keep
+        every scenario's directory (and monitoring log) distinct:
+
+        * ``offline`` / ``vl-offline`` → ``"<isl>.<osl>.<concurrency>"``
+        * ``reranker`` → ``"<isl>.b<batch>.<concurrency>"``
+        * ``embeddings`` → ``"<isl>.<concurrency>"``
+        """
+        parts = [str(scenario.input_tokens)]
+        if hasattr(scenario, "output_tokens"):
+            parts.append(str(scenario.output_tokens))
+        elif hasattr(scenario, "random_batch_size"):
+            parts.append(f"b{scenario.random_batch_size}")
+        parts.append(str(scenario.max_concurrency))
+        return ".".join(parts)
+
     def _get_format_args(self, scenario: ScenarioConfig) -> dict[str, Any]:
         """Build the format-arg dict for filling command placeholders.
 
@@ -188,9 +216,7 @@ class VllmPerformanceBenchmark:
         return {
             **asdict(scenario),
             "model": self.model,
-            "result_dir": self.get_vllm_result_dir(
-                f"{scenario.input_tokens}.{scenario.output_tokens}.{scenario.max_concurrency}"  # type: ignore[union-attr]
-            ),
+            "result_dir": self.get_vllm_result_dir(self._scenario_result_name(scenario)),
         }
 
     def _get_command_for_scenario(self, scenario: ScenarioConfig) -> list[str]:
@@ -277,9 +303,7 @@ class VllmPerformanceBenchmark:
                 csv_file_path=self.base_dir / f"{self.device_name}_{self.used_device_num}_monitoring_log.csv",
                 start_dt=start_timestamp,
                 end_dt=end_timestamp,
-                target_csv_file_path=self.get_vllm_result_dir(
-                    f"{scenario.input_tokens}.{scenario.output_tokens}.{scenario.max_concurrency}"  # type: ignore[union-attr]
-                )
+                target_csv_file_path=self.get_vllm_result_dir(self._scenario_result_name(scenario))
                 / f"{self.device_name}_{self.used_device_num}_monitoring_log.csv",
             )
         )
@@ -298,7 +322,7 @@ class VllmPerformanceBenchmark:
         """
         results: dict[str, Any] = {
             "Input Tokens": scenario.input_tokens,
-            "Output Tokens": scenario.output_tokens,  # type: ignore[union-attr]
+            "Output Tokens": self._scenario_output_tokens(scenario),
             "Concurrent": scenario.max_concurrency,
         }
         for line in stdout.strip().split("\n"):
