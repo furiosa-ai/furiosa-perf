@@ -488,7 +488,7 @@
   // oriented so a taller bar always means Endpoint A is better (throughput -> A/B,
   // latency -> B/A). A bar is produced only where both endpoints measured the
   // concurrency, mirroring the server-side behaviour.
-  function computeRatioSeries(task, metric, aKey, bKey) {
+  function computeRatioSeries(task, metric, aEp, bEp) {
     const seriesByModel = {};
     const metaByModel = {};
     const concurrentSet = new Set();
@@ -496,8 +496,8 @@
 
     Object.keys(taskData).sort().forEach((model) => {
       const eps = taskData[model];
-      const aBlock = eps[aKey] && eps[aKey][metric.key];
-      const bBlock = eps[bKey] && eps[bKey][metric.key];
+      const aBlock = resolveMetricBlock(eps, aEp, metric.key);
+      const bBlock = resolveMetricBlock(eps, bEp, metric.key);
       if (!aBlock || !bBlock) return;
 
       const A = bestPerConcurrency(aBlock, metric.better);
@@ -592,64 +592,146 @@
     return { data, layout };
   }
 
-  function epByKey(key) {
-    return (OVERVIEW.blob.endpoints || []).find(e => e.key === key) || null;
+  // Aggregate GPU endpoints: one per non-RNGD hardware (e.g. RTX-PRO-6000, H100),
+  // merging its vLLM versions. When resolved for a model, the *latest* version that
+  // has that model's data is used — so Endpoint B covers every model any GPU version
+  // benchmarked. Member keys are stored latest-version-first.
+  function buildGpuAggregates() {
+    const blob = OVERVIEW.blob;
+    const groups = {};
+    (blob.endpoints || []).forEach((e) => {
+      if (e.family === blob.npuFamily && e.backend === blob.npuBackend) return;  // RNGD is the A side
+      (groups[e.hardware] = groups[e.hardware] || []).push(e);
+    });
+    return Object.keys(groups).sort().map((hw) => {
+      const members = groups[hw].slice().sort((a, b) => (a.version < b.version ? 1 : a.version > b.version ? -1 : 0));
+      const backends = Array.from(new Set(members.map(m => m.backend)));
+      return {
+        key: 'agg|' + hw,
+        hardware: hw,
+        family: members[0].family,
+        backend: backends.join('/'),
+        label: `${hw} (${backends.join('/')})`,
+        isAggregate: true,
+        memberKeys: members.map(m => m.key),  // latest version first
+      };
+    });
+  }
+
+  function endpointByKey(key) {
+    return OVERVIEW.endpointIndex[key] || null;
   }
 
   function currentMode() {
     const sel = document.getElementById('mode-select');
-    return sel ? sel.value : 'version';
+    return sel ? sel.value : 'device';
   }
 
-  function endpointsForMode(mode) {
-    return mode === 'version'
-      ? (OVERVIEW.blob.versionEndpoints || [])
-      : (OVERVIEW.blob.endpoints || []);
+  // Endpoint candidates for one side of the comparison.
+  //  - version mode: RNGD furiosa-llm versions (both sides).
+  //  - device mode:  A = RNGD furiosa-llm versions; B = aggregate GPU devices.
+  function endpointListForSide(mode, side) {
+    const blob = OVERVIEW.blob;
+    if (mode === 'version') return blob.versionEndpoints || [];
+    return side === 'A' ? (blob.versionEndpoints || []) : (OVERVIEW.gpuAggregates || []);
   }
 
-  function optionLabel(mode, e) {
-    if (mode === 'version') return e.version || '(no version)';
-    return e.label;
+  function optionLabel(mode, side, e) {
+    if (mode === 'device' && side === 'B') return e.label;  // aggregate GPU label
+    return e.version || e.label || '(no version)';
   }
 
-  function fillEndpointSelect(sel, mode, list, selectedKey) {
+  function fillEndpointSelect(sel, mode, side, list, selectedKey) {
     if (!sel) return;
     sel.innerHTML = '';
     list.forEach((e) => {
       const opt = document.createElement('option');
       opt.value = e.key;
-      opt.textContent = optionLabel(mode, e);
+      opt.textContent = optionLabel(mode, side, e);
       sel.appendChild(opt);
     });
     if (selectedKey && list.some(e => e.key === selectedKey)) sel.value = selectedKey;
   }
 
-  // Endpoint A comes first so "taller bar = A better" reads naturally:
-  //  - version mode: A = latest RNGD version, B = the previous one
-  //  - device mode:  A = latest RNGD/furiosa-llm, B = latest RTX/vLLM (mirrors the
-  //    original RNGD-vs-RTX-Pro-6000 default)
+  // Resolve an endpoint's metric block for one model. Aggregates fall through their
+  // member versions (latest first) and return the first that has data.
+  function resolveMetricBlock(modelEps, endpoint, metricKey) {
+    if (!endpoint) return null;
+    if (endpoint.isAggregate) {
+      for (const mk of endpoint.memberKeys) {
+        const block = modelEps[mk] && modelEps[mk][metricKey];
+        if (block) return block;
+      }
+      return null;
+    }
+    return (modelEps[endpoint.key] && modelEps[endpoint.key][metricKey]) || null;
+  }
+
+  // Whether a model has any data for an endpoint (used for default-pair coverage).
+  function endpointPresent(modelEps, endpoint) {
+    if (!endpoint) return false;
+    if (endpoint.isAggregate) return endpoint.memberKeys.some(mk => modelEps[mk]);
+    return !!modelEps[endpoint.key];
+  }
+
+  // Number of models that have BOTH endpoints (any metric) for a task — i.e. how
+  // many bars the A/B pair would actually produce. Aggregates count if any member
+  // has the model.
+  function _pairOverlap(task, aEp, bEp) {
+    const data = (OVERVIEW.blob.data || {})[task] || {};
+    let n = 0;
+    for (const model of Object.keys(data)) {
+      if (endpointPresent(data[model], aEp) && endpointPresent(data[model], bEp)) n += 1;
+    }
+    return n;
+  }
+
+  // Pick the (A, B) pair from the candidate lists that yields the most comparable
+  // models for the task (so the default view isn't empty when the newest version is
+  // only partially populated). Ties keep the higher-version A.
+  function _bestPair(task, listA, listB, distinct) {
+    let best = null;
+    let bestN = -1;
+    for (const a of listA) {
+      for (const b of listB) {
+        if (distinct && a.key === b.key) continue;
+        const n = _pairOverlap(task, a, b);
+        if (n > bestN) {
+          bestN = n;
+          best = [a, b];
+        }
+      }
+    }
+    return best;
+  }
+
+  // Endpoint A comes first so "taller bar = A better" reads naturally. Defaults are
+  // chosen by *data coverage* for the current task, not by newest version — the
+  // latest build is often only partially benchmarked.
+  //  - version mode: the two RNGD versions with the most overlap (A = newer).
+  //  - device mode:  best-covered RNGD version (A) vs aggregate GPU device (B).
   function defaultEndpointKeys(mode) {
     const blob = OVERVIEW.blob;
+    const taskSel = document.getElementById('overview-task-select');
+    const task = taskSel ? taskSel.value : ((blob.tasks || [])[0]);
+
     if (mode === 'version') {
       const v = blob.versionEndpoints || [];
       if (!v.length) return [null, null];
-      const a = v[v.length - 1].key;
-      const b = v.length > 1 ? v[v.length - 2].key : v[v.length - 1].key;
-      return [a, b];
+      if (v.length === 1) return [v[0].key, v[0].key];
+      const pair = _bestPair(task, v, v, true) || [v[v.length - 1], v[v.length - 2]];
+      // Order so A is the newer version (taller bar => newer is better).
+      pair.sort((x, y) => (x.version < y.version ? 1 : x.version > y.version ? -1 : 0));
+      return [pair[0].key, pair[1].key];
     }
-    const eps = blob.endpoints || [];
-    const latest = (family, backend) => {
-      const cand = eps.filter(e => e.family === family && e.backend === backend);
-      cand.sort((x, y) => (x.version < y.version ? -1 : x.version > y.version ? 1 : 0));
-      return cand.length ? cand[cand.length - 1].key : null;
-    };
-    const a = latest(blob.npuFamily, blob.npuBackend) || (eps[0] && eps[0].key) || null;
-    let b = latest(blob.gpuFamily, blob.gpuBackend);
-    if (!b) {
-      const other = eps.find(e => e.key !== a);
-      b = other ? other.key : a;
+
+    const npu = blob.versionEndpoints || [];
+    const gpu = OVERVIEW.gpuAggregates || [];
+    if (npu.length && gpu.length) {
+      const pair = _bestPair(task, npu, gpu, false);
+      if (pair) return [pair[0].key, pair[1].key];
     }
-    return [a, b];
+    return [npu.length ? npu[npu.length - 1].key : null, gpu.length ? gpu[0].key : null];
   }
 
   function renderOverviewCharts() {
@@ -659,25 +741,27 @@
     const task = taskSel ? taskSel.value : ((blob.tasks || [])[0]);
     const aSel = document.getElementById('endpoint-a-select');
     const bSel = document.getElementById('endpoint-b-select');
-    const aKey = aSel ? aSel.value : null;
-    const bKey = bSel ? bSel.value : null;
-    const aEp = epByKey(aKey), bEp = epByKey(bKey);
+    const aEp = endpointByKey(aSel ? aSel.value : null);
+    const bEp = endpointByKey(bSel ? bSel.value : null);
     const aLabel = aEp ? aEp.label : 'A';
     const bLabel = bEp ? bEp.label : 'B';
+    // Version-vs-version is a parity check (100%); device comparison keeps the
+    // configured target line (90%).
+    const referenceRatio = currentMode() === 'version' ? 1.0 : blob.referenceRatio;
 
     let anyData = false;
     (blob.metrics || []).forEach((m) => {
       const div = document.getElementById('summary-plot-' + m.key);
       if (!div) return;
       const container = div.closest('.summary-chart');
-      const { concurrents, seriesByModel, metaByModel } = computeRatioSeries(task, m, aKey, bKey);
+      const { concurrents, seriesByModel, metaByModel } = computeRatioSeries(task, m, aEp, bEp);
       const hasData = concurrents.length && Object.keys(seriesByModel).length;
       if (hasData) {
         anyData = true;
         const caption = m.better === 'high' ? `${aLabel} / ${bLabel}` : `${bLabel} / ${aLabel}`;
         const { data, layout } = buildSummaryFigure(
           concurrents, seriesByModel, metaByModel, blob.colorMap,
-          m.label, caption, blob.referenceRatio, aLabel, bLabel);
+          m.label, caption, referenceRatio, aLabel, bLabel);
         if (container) container.style.display = '';
         Plotly.react(div, data, layout, { responsive: true }).then(() => {
           try { Plotly.Plots.resize(div); } catch (_) {}
@@ -694,16 +778,21 @@
 
   function onModeChange() {
     const mode = currentMode();
-    const list = endpointsForMode(mode);
     const [aDef, bDef] = defaultEndpointKeys(mode);
-    fillEndpointSelect(document.getElementById('endpoint-a-select'), mode, list, aDef);
-    fillEndpointSelect(document.getElementById('endpoint-b-select'), mode, list, bDef);
+    fillEndpointSelect(document.getElementById('endpoint-a-select'), mode, 'A', endpointListForSide(mode, 'A'), aDef);
+    fillEndpointSelect(document.getElementById('endpoint-b-select'), mode, 'B', endpointListForSide(mode, 'B'), bDef);
     renderOverviewCharts();
   }
 
   function initOverview() {
     OVERVIEW.blob = loadSummaryBlob();
     if (!OVERVIEW.blob) return false;
+
+    // Build aggregate GPU endpoints + a key -> endpoint index (real + aggregate).
+    OVERVIEW.gpuAggregates = buildGpuAggregates();
+    OVERVIEW.endpointIndex = {};
+    (OVERVIEW.blob.endpoints || []).forEach((e) => { OVERVIEW.endpointIndex[e.key] = e; });
+    OVERVIEW.gpuAggregates.forEach((e) => { OVERVIEW.endpointIndex[e.key] = e; });
 
     const taskSel = document.getElementById('overview-task-select');
     if (taskSel) {

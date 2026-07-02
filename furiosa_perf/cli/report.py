@@ -6,6 +6,7 @@ from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import click
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
@@ -178,6 +179,32 @@ def _endpoint_label(hardware: str, backend: str, version: str) -> str:
     return " ".join(parts)
 
 
+def _select_summary_scenario(task: str, tdf: pd.DataFrame, isl: int, osl: int) -> pd.DataFrame:
+    """Rows for one task's summary scenario.
+
+    Most tasks use the exact ``isl/osl`` scenario. ``vl-offline`` carries image
+    tokens, so its text ISL rarely lands exactly on the nominal value — for it we
+    take the largest ISL strictly below ``isl`` (same OSL) and still present it as the
+    ``isl/osl`` scenario. Falls back to the exact scenario when no below-target row
+    exists.
+
+    Args:
+        task (str): Task name.
+        tdf (pd.DataFrame): Rows for that task.
+        isl (int): Nominal input sequence length for the summary scenario.
+        osl (int): Nominal output sequence length for the summary scenario.
+
+    Returns:
+        pd.DataFrame: The selected subset (possibly empty).
+    """
+    if task == "vl-offline":
+        cand = tdf[(tdf["OSL"] == osl) & (tdf["ISL"] < isl)]
+        if not cand.empty:
+            target_isl = int(cand["ISL"].max())
+            return tdf[(tdf["OSL"] == osl) & (tdf["ISL"] == target_isl)]
+    return tdf[(tdf["ISL"] == isl) & (tdf["OSL"] == osl)]
+
+
 def build_summary_data(frames: list[pd.DataFrame]) -> dict[str, Any] | None:
     """Build the compact data blob powering the interactive Overview page.
 
@@ -204,22 +231,31 @@ def build_summary_data(frames: list[pd.DataFrame]) -> dict[str, Any] | None:
     if not frames:
         return None
     df = pd.concat(frames, ignore_index=True)
-    isl, osl = SUMMARY_SCENARIO_ISL_OSL
-    df = df[(df["ISL"] == isl) & (df["OSL"] == osl)].copy()
-    if df.empty:
-        return None
-
     df["family"] = df["hardware"].map(_device_family)
     df["version"] = df["version"].fillna("")
 
-    models = sorted(df["model"].dropna().unique())
+    isl, osl = SUMMARY_SCENARIO_ISL_OSL
+
+    # Per-task scenario selection (see _select_summary_scenario). Each task's rows are
+    # pre-filtered to its summary scenario; vl-offline uses the largest sub-1k ISL but
+    # is still presented as the 1k/1k scenario.
+    task_frames: dict[str, pd.DataFrame] = {}
+    for task in sorted(df["task"].dropna().unique()):
+        selected = _select_summary_scenario(task, df[df["task"] == task], isl, osl)
+        if not selected.empty:
+            task_frames[task] = selected.copy()
+    if not task_frames:
+        return None
+
+    scenario_df = pd.concat(task_frames.values(), ignore_index=True)
+    models = sorted(scenario_df["model"].dropna().unique())
     color_map = build_model_color_map(models)
 
     # All distinct endpoints present in the scenario, plus the RNGD/furiosa-llm
     # subset used to populate the "Version comparison" dropdowns.
     endpoints: list[dict[str, str]] = []
     seen: set[str] = set()
-    for _, r in df[["hardware", "backend", "version", "family"]].drop_duplicates().iterrows():
+    for _, r in scenario_df[["hardware", "backend", "version", "family"]].drop_duplicates().iterrows():
         hw, backend, ver, family = r["hardware"], r["backend"], r["version"], r["family"]
         key = f"{hw}|{backend}|{ver}"
         if key in seen:
@@ -243,8 +279,7 @@ def build_summary_data(frames: list[pd.DataFrame]) -> dict[str, Any] | None:
 
     # data[task][model][endpoint_key][metric_key][concurrency][num_devices] = value
     data: dict[str, Any] = {}
-    for task in sorted(df["task"].dropna().unique()):
-        tdf = df[df["task"] == task]
+    for task, tdf in task_frames.items():
         task_block: dict[str, Any] = {}
         for model in models:
             mdf = tdf[tdf["model"] == model]
@@ -264,7 +299,12 @@ def build_summary_data(frames: list[pd.DataFrame]) -> dict[str, Any] | None:
                     column, better = metric["column"], metric["better"]
                     if column not in edf.columns:
                         continue
+                    # Drop NaN, ±inf, and zero: inf arises e.g. from TPS/Watt when a
+                    # run has no power reading (throughput / 0). A single inf/NaN would
+                    # otherwise serialize to `Infinity`/`NaN`, which is invalid JSON and
+                    # breaks the entire Overview blob in the browser.
                     s = edf.dropna(subset=[column])
+                    s = s[np.isfinite(s[column])]
                     s = s[s[column] != 0]
                     if s.empty:
                         continue
@@ -272,7 +312,7 @@ def build_summary_data(frames: list[pd.DataFrame]) -> dict[str, Any] | None:
                     for (conc, ndev), grp in s.groupby(["Concurrent", "num_devices"]):
                         vals = grp[column]
                         value = float(vals.max() if better == "high" else vals.min())
-                        if value == 0:
+                        if value == 0 or not np.isfinite(value):
                             continue
                         conc_block.setdefault(str(int(conc)), {})[str(int(ndev))] = round(value, 6)
                     if conc_block:
@@ -430,7 +470,9 @@ def report(
 
     summary_data = build_summary_data(summary_frames)
     if summary_data is not None:
-        blob_json = json.dumps(summary_data).replace("</", "<\\/")  # keep </script> from closing the tag
+        # allow_nan=False: fail loudly if any non-finite value slipped through rather
+        # than emit `Infinity`/`NaN` (invalid JSON that would break the Overview blob).
+        blob_json = json.dumps(summary_data, allow_nan=False).replace("</", "<\\/")
         contents["summary"] = {
             "scenario": summary_data["scenario"],
             "metrics": summary_data["metrics"],
