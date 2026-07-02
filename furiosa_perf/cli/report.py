@@ -16,7 +16,6 @@ from furiosa_perf.reporting.charts import (
     plot_interactive_user_chart,
     plot_line_chart,
     plot_rack_performance_chart,
-    plot_summary_ratio_bar_chart,
     plot_table_chart,
     plot_ttft_or_tpot_chart,
 )
@@ -173,172 +172,135 @@ def save_report_html(report_contents: dict[str, Any], manifest_data: list[dict[s
     click.echo(f"Report generated successfully in {report_path}.")
 
 
-def _latest_backend_rows(model_df: pd.DataFrame, family: str, backend: str) -> pd.DataFrame:
-    """Rows for one hardware family + backend, restricted to its newest version.
+def _endpoint_label(hardware: str, backend: str, version: str) -> str:
+    """Human-readable label for a ``(hardware, backend, version)`` endpoint."""
+    parts = [p for p in (hardware, backend, version) if p]
+    return " ".join(parts)
+
+
+def build_summary_data(frames: list[pd.DataFrame]) -> dict[str, Any] | None:
+    """Build the compact data blob powering the interactive Overview page.
+
+    The Overview page lets the user pick which two endpoints to compare (two RNGD
+    versions, or two device+version endpoints) and computes the A/B performance
+    ratios *in the browser*. So instead of pre-rendering charts server-side, this
+    emits a compact JSON structure the front-end reduces on the fly.
+
+    For the configured ISL/OSL scenario each measured value is pre-reduced per
+    ``(task, model, endpoint, metric, concurrency, num_devices)`` in the metric's
+    ``better`` direction (max for throughput-like, min for latency-like), with
+    zero/NaN values dropped — mirroring the filtering the old Python matching logic
+    did before ``report.js`` ports ``_best_per_concurrency`` /
+    ``_closest_per_concurrency`` over this data.
 
     Args:
-        model_df (pd.DataFrame): Rows for a single model (already scenario-filtered).
-        family (str): Hardware family key (e.g. ``"RNGD"`` or ``"RTX"``).
-        backend (str): Serving backend (e.g. ``"furiosa-llm"`` or ``"vllm"``).
+        frames (list[pd.DataFrame]): Per-(model, task) frames, each tagged with
+            ``model`` and ``task`` columns.
 
     Returns:
-        pd.DataFrame: The subset of ``model_df`` matching ``family``/``backend`` whose
-        ``version`` equals the lexicographically largest version present (mirrors how
-        the per-model report picks the latest furiosa-llm build). Empty if none match.
-    """
-    sub = model_df[(model_df["family"] == family) & (model_df["backend"] == backend)]
-    if sub.empty:
-        return sub
-    return sub[sub["version"] == sub["version"].max()]
-
-
-def _best_per_concurrency(sub: pd.DataFrame, column: str, better: str) -> dict[int, tuple[float, int]]:
-    """Best metric value per concurrency, plus the device count that achieved it.
-
-    Args:
-        sub (pd.DataFrame): Rows for one model + hardware family (latest version).
-        column (str): Metric column to read.
-        better (str): ``"high"`` (throughput-like; keep the max) or ``"low"``
-            (latency-like; keep the min).
-
-    Returns:
-        dict[int, tuple[float, int]]: ``concurrency -> (value, num_devices)``. When
-        several device counts tie on value the smaller device count wins. Zero/NaN
-        values are dropped (they cannot be used as a ratio term).
-    """
-    if sub.empty or column not in sub.columns:
-        return {}
-    s = sub.dropna(subset=[column])
-    s = s[s[column] != 0]
-    out: dict[int, tuple[float, int]] = {}
-    ascending = better == "low"
-    for concurrency, grp in s.groupby("Concurrent"):
-        row = grp.sort_values([column, "num_devices"], ascending=[ascending, True]).iloc[0]
-        out[int(concurrency)] = (float(row[column]), int(row["num_devices"]))
-    return out
-
-
-def _closest_per_concurrency(
-    sub: pd.DataFrame, column: str, better: str, targets: dict[int, int]
-) -> dict[int, tuple[float, int]]:
-    """Per concurrency, the value of the device count closest to ``targets[c]``.
-
-    Used to match the GPU (RTX Pro 6000) result to the RNGD device count chosen for
-    the same model + concurrency, so the ratio compares like-sized systems.
-
-    Args:
-        sub (pd.DataFrame): Rows for one model + hardware family (latest version).
-        column (str): Metric column to read.
-        better (str): ``"high"`` (max) or ``"low"`` (min) tie-break when one device
-            count has multiple rows at a concurrency.
-        targets (dict[int, int]): ``concurrency -> reference device count`` to match.
-
-    Returns:
-        dict[int, tuple[float, int]]: ``concurrency -> (value, num_devices)`` for the
-        concurrencies present in both ``sub`` and ``targets``. Ties on distance pick
-        the smaller device count.
-    """
-    if sub.empty or column not in sub.columns:
-        return {}
-    s = sub.dropna(subset=[column])
-    s = s[s[column] != 0]
-    out: dict[int, tuple[float, int]] = {}
-    for concurrency, grp in s.groupby("Concurrent"):
-        c = int(concurrency)
-        if c not in targets:
-            continue
-        target = targets[c]
-        unique_counts = sorted({int(x) for x in grp["num_devices"].unique()})
-        n = min((abs(nc - target), nc) for nc in unique_counts)[1]  # closest count, tie -> smaller
-        vals = grp[grp["num_devices"] == n][column]
-        value = float(vals.max() if better == "high" else vals.min())
-        if value != 0:
-            out[c] = (value, n)
-    return out
-
-
-def build_summary_charts(frames: list[pd.DataFrame]) -> list[dict[str, Any]]:
-    """Build the landing-page RNGD-vs-GPU performance-ratio bar charts.
-
-    For the configured ISL/OSL scenario, one bar chart is produced per metric in
-    :data:`SUMMARY_METRICS`, with concurrency on the x-axis and one toggleable bar
-    per model. At each concurrency the RNGD side uses its best-performing device
-    count (latest furiosa-llm) and the RTX Pro 6000 side is matched to the device
-    count closest to it (latest vLLM). A bar is drawn only when *both* sides measured
-    that concurrency, so models unsupported on RNGD render no bar.
-
-    Args:
-        frames (list[pd.DataFrame]): Per-(model, task) frames from
-            :func:`collect_and_build_report_html`, each tagged with a ``model`` column.
-
-    Returns:
-        list[dict[str, Any]]: ``{"title", "caption", "html"}`` per metric chart;
-        empty when the scenario produced no comparable data.
+        dict[str, Any] | None: The blob (see keys below), or ``None`` when the
+        scenario produced no data.
     """
     if not frames:
-        return []
+        return None
     df = pd.concat(frames, ignore_index=True)
     isl, osl = SUMMARY_SCENARIO_ISL_OSL
     df = df[(df["ISL"] == isl) & (df["OSL"] == osl)].copy()
     if df.empty:
-        return []
+        return None
 
     df["family"] = df["hardware"].map(_device_family)
-    models = sorted(df["model"].unique())
+    df["version"] = df["version"].fillna("")
+
+    models = sorted(df["model"].dropna().unique())
     color_map = build_model_color_map(models)
 
-    charts: list[dict[str, Any]] = []
-    for metric in SUMMARY_METRICS:
-        column, better, direction = metric["column"], metric["better"], metric["ratio"]
-        series_by_model: dict[str, dict[int, float]] = {}
-        meta_by_model: dict[str, dict[int, tuple[int, int]]] = {}
-        concurrency_set: set[int] = set()
-
-        for model in models:
-            mdf = df[df["model"] == model]
-            npu = _best_per_concurrency(
-                _latest_backend_rows(mdf, SUMMARY_NPU_FAMILY, SUMMARY_NPU_BACKEND), column, better
-            )
-            targets = {c: n for c, (_, n) in npu.items()}
-            gpu = _closest_per_concurrency(
-                _latest_backend_rows(mdf, SUMMARY_GPU_FAMILY, SUMMARY_GPU_BACKEND), column, better, targets
-            )
-
-            ratios: dict[int, float] = {}
-            meta: dict[int, tuple[int, int]] = {}
-            for c in sorted(set(npu) & set(gpu)):
-                npu_value, npu_n = npu[c]
-                gpu_value, gpu_n = gpu[c]
-                ratios[c] = (
-                    round(npu_value / gpu_value, 2) if direction == "npu/gpu" else round(gpu_value / npu_value, 2)
-                )
-                meta[c] = (npu_n, gpu_n)
-            if ratios:
-                series_by_model[model] = ratios
-                meta_by_model[model] = meta
-                concurrency_set.update(ratios)
-
-        if not series_by_model:
+    # All distinct endpoints present in the scenario, plus the RNGD/furiosa-llm
+    # subset used to populate the "Version comparison" dropdowns.
+    endpoints: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for _, r in df[["hardware", "backend", "version", "family"]].drop_duplicates().iterrows():
+        hw, backend, ver, family = r["hardware"], r["backend"], r["version"], r["family"]
+        key = f"{hw}|{backend}|{ver}"
+        if key in seen:
             continue
-
-        caption = "RNGD / RTX Pro 6000" if direction == "npu/gpu" else "RTX Pro 6000 / RNGD"
-        fig = plot_summary_ratio_bar_chart(
-            sorted(concurrency_set),
-            series_by_model,
-            color_map,
-            metric["label"],
-            caption,
-            SUMMARY_REFERENCE_RATIO,
-            meta_by_model,
-        )
-        charts.append(
+        seen.add(key)
+        endpoints.append(
             {
-                "title": metric["label"],
-                "caption": caption,
-                "html": fig_to_lazy_html(fig, f"summary-{metric['key']}", config={"responsive": True}),
+                "key": key,
+                "hardware": hw,
+                "backend": backend,
+                "version": ver,
+                "family": family,
+                "label": _endpoint_label(hw, backend, ver),
             }
         )
-    return charts
+    endpoints.sort(key=lambda e: (e["family"], e["hardware"], e["backend"], e["version"]))
+    version_endpoints = sorted(
+        (e for e in endpoints if e["family"] == SUMMARY_NPU_FAMILY and e["backend"] == SUMMARY_NPU_BACKEND),
+        key=lambda e: e["version"],
+    )
+
+    # data[task][model][endpoint_key][metric_key][concurrency][num_devices] = value
+    data: dict[str, Any] = {}
+    for task in sorted(df["task"].dropna().unique()):
+        tdf = df[df["task"] == task]
+        task_block: dict[str, Any] = {}
+        for model in models:
+            mdf = tdf[tdf["model"] == model]
+            if mdf.empty:
+                continue
+            model_block: dict[str, Any] = {}
+            for endpoint in endpoints:
+                edf = mdf[
+                    (mdf["hardware"] == endpoint["hardware"])
+                    & (mdf["backend"] == endpoint["backend"])
+                    & (mdf["version"] == endpoint["version"])
+                ]
+                if edf.empty:
+                    continue
+                metric_block: dict[str, Any] = {}
+                for metric in SUMMARY_METRICS:
+                    column, better = metric["column"], metric["better"]
+                    if column not in edf.columns:
+                        continue
+                    s = edf.dropna(subset=[column])
+                    s = s[s[column] != 0]
+                    if s.empty:
+                        continue
+                    conc_block: dict[str, dict[str, float]] = {}
+                    for (conc, ndev), grp in s.groupby(["Concurrent", "num_devices"]):
+                        vals = grp[column]
+                        value = float(vals.max() if better == "high" else vals.min())
+                        if value == 0:
+                            continue
+                        conc_block.setdefault(str(int(conc)), {})[str(int(ndev))] = round(value, 6)
+                    if conc_block:
+                        metric_block[metric["key"]] = conc_block
+                if metric_block:
+                    model_block[endpoint["key"]] = metric_block
+            if model_block:
+                task_block[model] = model_block
+        if task_block:
+            data[task] = task_block
+
+    if not data:
+        return None
+
+    return {
+        "scenario": f"{isl}/{osl}",
+        "tasks": sorted(data),
+        "metrics": [{"key": m["key"], "label": m["label"], "better": m["better"]} for m in SUMMARY_METRICS],
+        "referenceRatio": SUMMARY_REFERENCE_RATIO,
+        "endpoints": endpoints,
+        "versionEndpoints": version_endpoints,
+        "colorMap": color_map,
+        "npuFamily": SUMMARY_NPU_FAMILY,
+        "npuBackend": SUMMARY_NPU_BACKEND,
+        "gpuFamily": SUMMARY_GPU_FAMILY,
+        "gpuBackend": SUMMARY_GPU_BACKEND,
+        "data": data,
+    }
 
 
 @click.command()
@@ -417,6 +379,7 @@ def report(
 
             frame = task_report["dataframe"].copy()
             frame["model"] = model
+            frame["task"] = task
             summary_frames.append(frame)
 
             if model not in model_items:
@@ -465,10 +428,15 @@ def report(
             "theme": "dark",
         }
 
-    isl, osl = SUMMARY_SCENARIO_ISL_OSL
-    contents["summary"] = {
-        "scenario": f"{isl}/{osl}",
-        "charts": build_summary_charts(summary_frames),
-    }
+    summary_data = build_summary_data(summary_frames)
+    if summary_data is not None:
+        blob_json = json.dumps(summary_data).replace("</", "<\\/")  # keep </script> from closing the tag
+        contents["summary"] = {
+            "scenario": summary_data["scenario"],
+            "metrics": summary_data["metrics"],
+            "blob_json": blob_json,
+        }
+    else:
+        contents["summary"] = None
 
     save_report_html(contents, manifest_data, out_dir)

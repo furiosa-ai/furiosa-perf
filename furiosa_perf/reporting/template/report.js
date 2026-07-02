@@ -410,22 +410,9 @@
     const tokenSelect = currentTokenSelect();
     const tokens = tokenSelect ? tokenSelect.value : null;
 
-    // "Overview" is a standalone initial page: show only the summary section and
-    // hide every model detail view.
-    const isOverview = (model === '__overview__');
-    document.querySelectorAll('.summary-section').forEach((sec) => {
-      sec.style.display = isOverview ? '' : 'none';
-    });
-
     document.querySelectorAll('.model-section').forEach((section) => {
-      section.style.display = (!isOverview && section.dataset.model === model) ? '' : 'none';
+      section.style.display = (section.dataset.model === model) ? '' : 'none';
     });
-
-    if (isOverview) {
-      document.querySelectorAll('.graph-container').forEach((group) => { group.style.display = 'none'; });
-      renderSummaryCharts();
-      return;
-    }
 
     document.querySelectorAll('.graph-container').forEach((group) => {
       const match = group.dataset.model === model
@@ -436,17 +423,322 @@
     });
   }
 
-  // Landing summary charts live outside the model navigation, so render them
-  // eagerly on load and keep them sized to their container.
-  function renderSummaryCharts() {
-    const sections = document.querySelectorAll('.summary-section');
-    sections.forEach((section) => {
-      Array.from(section.querySelectorAll('.lazy-plot')).forEach((div) => {
-        renderLazyPlot(div).then((el) => {
-          if (el) { try { Plotly.Plots.resize(el); } catch (_) {} }
-        });
+  // ============================================================
+  // Overview page: interactive A/B performance-ratio charts.
+  // The two compared endpoints are user-selectable, so ratios cannot be
+  // pre-rendered server-side. Instead report.py emits a compact data blob (see
+  // build_summary_data) and we reduce it -> ratios -> grouped bar charts here,
+  // porting the Python matching logic (_best/_closest_per_concurrency).
+  // ============================================================
+
+  const OVERVIEW = { blob: null };
+
+  function loadSummaryBlob() {
+    const el = document.getElementById('summary-data');
+    if (!el) return null;
+    try { return JSON.parse(el.textContent); }
+    catch (e) { console.error('Failed to parse summary-data blob', e); return null; }
+  }
+
+  // Port of _best_per_concurrency: best value per concurrency plus the device count
+  // achieving it; ties on value pick the smaller device count. Blob values are
+  // already reduced in the metric's `better` direction and free of zeros/NaN, so
+  // this only picks across device counts.
+  function bestPerConcurrency(byConc, better) {
+    const out = {};
+    for (const c of Object.keys(byConc)) {
+      const entries = Object.entries(byConc[c])
+        .map(([n, v]) => [Number(n), v])
+        .filter(([, v]) => Number.isFinite(v) && v !== 0);
+      if (!entries.length) continue;
+      entries.sort((a, b) => (a[1] !== b[1]
+        ? (better === 'low' ? a[1] - b[1] : b[1] - a[1])
+        : a[0] - b[0]));
+      out[c] = [entries[0][1], entries[0][0]];  // [value, num_devices]
+    }
+    return out;
+  }
+
+  // Port of _closest_per_concurrency: per concurrency present in `targets`, take the
+  // device count closest to targets[c] (ties -> smaller count).
+  function closestPerConcurrency(byConc, targets) {
+    const out = {};
+    for (const c of Object.keys(byConc)) {
+      if (!(c in targets)) continue;
+      const target = targets[c];
+      const counts = Object.keys(byConc[c])
+        .map(Number)
+        .filter(n => Number.isFinite(byConc[c][String(n)]) && byConc[c][String(n)] !== 0)
+        .sort((a, b) => a - b);
+      if (!counts.length) continue;
+      let bestN = counts[0];
+      let bestKey = [Math.abs(counts[0] - target), counts[0]];
+      for (const nc of counts) {
+        const key = [Math.abs(nc - target), nc];
+        if (key[0] < bestKey[0] || (key[0] === bestKey[0] && key[1] < bestKey[1])) {
+          bestKey = key; bestN = nc;
+        }
+      }
+      out[c] = [byConc[c][String(bestN)], bestN];
+    }
+    return out;
+  }
+
+  // Per-model ratio series for one metric and one A/B endpoint pair. Ratio is
+  // oriented so a taller bar always means Endpoint A is better (throughput -> A/B,
+  // latency -> B/A). A bar is produced only where both endpoints measured the
+  // concurrency, mirroring the server-side behaviour.
+  function computeRatioSeries(task, metric, aKey, bKey) {
+    const seriesByModel = {};
+    const metaByModel = {};
+    const concurrentSet = new Set();
+    const taskData = (OVERVIEW.blob.data || {})[task] || {};
+
+    Object.keys(taskData).sort().forEach((model) => {
+      const eps = taskData[model];
+      const aBlock = eps[aKey] && eps[aKey][metric.key];
+      const bBlock = eps[bKey] && eps[bKey][metric.key];
+      if (!aBlock || !bBlock) return;
+
+      const A = bestPerConcurrency(aBlock, metric.better);
+      const targets = {};
+      Object.keys(A).forEach((c) => { targets[c] = A[c][1]; });
+      const B = closestPerConcurrency(bBlock, targets);
+
+      const ratios = {};
+      const meta = {};
+      Object.keys(A).forEach((c) => {
+        if (!(c in B)) return;
+        const aVal = A[c][0], bVal = B[c][0];
+        if (!(aVal > 0) || !(bVal > 0)) return;
+        const r = metric.better === 'low' ? bVal / aVal : aVal / bVal;
+        ratios[c] = Math.round(r * 100) / 100;
+        meta[c] = [A[c][1], B[c][1]];  // [A devices, B devices]
+        concurrentSet.add(Number(c));
+      });
+      if (Object.keys(ratios).length) {
+        seriesByModel[model] = ratios;
+        metaByModel[model] = meta;
+      }
+    });
+
+    const concurrents = Array.from(concurrentSet).sort((a, b) => a - b);
+    return { concurrents, seriesByModel, metaByModel };
+  }
+
+  // Grouped bar figure — a JS port of plot_summary_ratio_bar_chart's styling.
+  function buildSummaryFigure(concurrents, seriesByModel, metaByModel, colorMap,
+                              metricLabel, ratioCaption, referenceRatio, aLabel, bLabel) {
+    const xLabels = concurrents.map(String);
+    const data = [];
+    Object.keys(seriesByModel).sort().forEach((model) => {
+      const byC = seriesByModel[model];
+      const meta = metaByModel[model] || {};
+      const ys = concurrents.map(c => (String(c) in byC ? byC[String(c)] : null));
+      if (ys.every(y => y === null)) return;
+      const customdata = concurrents.map(c => (meta[String(c)] || [null, null]));
+      data.push({
+        type: 'bar',
+        name: model,
+        x: xLabels,
+        y: ys,
+        marker: { color: (colorMap || {})[model] },
+        customdata: customdata,
+        hovertemplate:
+          `${model}<br>Concurrent=%{x}<br>${metricLabel}: %{y:.2f}x` +
+          `<br>${aLabel} ×%{customdata[0]} vs ${bLabel} ×%{customdata[1]}<extra></extra>`,
       });
     });
+
+    const layout = {
+      barmode: 'group',
+      title: {
+        text: `${metricLabel}  (${ratioCaption})`,
+        x: 0.5, xanchor: 'center', xref: 'container',
+        y: 0.98, yanchor: 'top', yref: 'container',
+        font: { family: 'Favorit-medium, system-ui', color: '#ffffff', size: 18 },
+      },
+      plot_bgcolor: 'black',
+      paper_bgcolor: 'black',
+      font: { family: 'Favorit-medium, system-ui', color: '#ffffff', size: 14 },
+      margin: { l: 60, r: 30, t: 70, b: 90 },
+      legend: {
+        orientation: 'h', x: 0.5, xanchor: 'center', y: -0.16, yanchor: 'top',
+        font: { family: 'Favorit-medium, system-ui', color: '#eeeeee', size: 13 },
+        bgcolor: 'rgba(0,0,0,0)', bordercolor: 'rgba(0,0,0,0)',
+      },
+      bargap: 0.3,
+      autosize: true,
+      xaxis: {
+        title: { text: 'Concurrent' }, type: 'category', ticks: 'outside', ticklen: 5,
+        gridcolor: 'rgba(255,255,255,0.12)',
+      },
+      yaxis: {
+        title: { text: `${metricLabel} ratio (×)` }, rangemode: 'tozero',
+        gridcolor: 'rgba(255,255,255,0.12)', ticks: 'outside', ticklen: 5, zeroline: false,
+      },
+      shapes: [{
+        type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y',
+        y0: referenceRatio, y1: referenceRatio,
+        line: { dash: 'dash', color: 'rgba(255,255,255,0.7)', width: 2 },
+      }],
+      annotations: [{
+        xref: 'paper', x: 1, yref: 'y', y: referenceRatio,
+        text: `${Math.round(referenceRatio * 100)}%`,
+        showarrow: false, xanchor: 'right', yanchor: 'bottom',
+        font: { color: '#ffffff' },
+      }],
+    };
+    return { data, layout };
+  }
+
+  function epByKey(key) {
+    return (OVERVIEW.blob.endpoints || []).find(e => e.key === key) || null;
+  }
+
+  function currentMode() {
+    const sel = document.getElementById('mode-select');
+    return sel ? sel.value : 'version';
+  }
+
+  function endpointsForMode(mode) {
+    return mode === 'version'
+      ? (OVERVIEW.blob.versionEndpoints || [])
+      : (OVERVIEW.blob.endpoints || []);
+  }
+
+  function optionLabel(mode, e) {
+    if (mode === 'version') return e.version || '(no version)';
+    return e.label;
+  }
+
+  function fillEndpointSelect(sel, mode, list, selectedKey) {
+    if (!sel) return;
+    sel.innerHTML = '';
+    list.forEach((e) => {
+      const opt = document.createElement('option');
+      opt.value = e.key;
+      opt.textContent = optionLabel(mode, e);
+      sel.appendChild(opt);
+    });
+    if (selectedKey && list.some(e => e.key === selectedKey)) sel.value = selectedKey;
+  }
+
+  // Endpoint A comes first so "taller bar = A better" reads naturally:
+  //  - version mode: A = latest RNGD version, B = the previous one
+  //  - device mode:  A = latest RNGD/furiosa-llm, B = latest RTX/vLLM (mirrors the
+  //    original RNGD-vs-RTX-Pro-6000 default)
+  function defaultEndpointKeys(mode) {
+    const blob = OVERVIEW.blob;
+    if (mode === 'version') {
+      const v = blob.versionEndpoints || [];
+      if (!v.length) return [null, null];
+      const a = v[v.length - 1].key;
+      const b = v.length > 1 ? v[v.length - 2].key : v[v.length - 1].key;
+      return [a, b];
+    }
+    const eps = blob.endpoints || [];
+    const latest = (family, backend) => {
+      const cand = eps.filter(e => e.family === family && e.backend === backend);
+      cand.sort((x, y) => (x.version < y.version ? -1 : x.version > y.version ? 1 : 0));
+      return cand.length ? cand[cand.length - 1].key : null;
+    };
+    const a = latest(blob.npuFamily, blob.npuBackend) || (eps[0] && eps[0].key) || null;
+    let b = latest(blob.gpuFamily, blob.gpuBackend);
+    if (!b) {
+      const other = eps.find(e => e.key !== a);
+      b = other ? other.key : a;
+    }
+    return [a, b];
+  }
+
+  function renderOverviewCharts() {
+    const blob = OVERVIEW.blob;
+    if (!blob) return;
+    const taskSel = document.getElementById('overview-task-select');
+    const task = taskSel ? taskSel.value : ((blob.tasks || [])[0]);
+    const aSel = document.getElementById('endpoint-a-select');
+    const bSel = document.getElementById('endpoint-b-select');
+    const aKey = aSel ? aSel.value : null;
+    const bKey = bSel ? bSel.value : null;
+    const aEp = epByKey(aKey), bEp = epByKey(bKey);
+    const aLabel = aEp ? aEp.label : 'A';
+    const bLabel = bEp ? bEp.label : 'B';
+
+    let anyData = false;
+    (blob.metrics || []).forEach((m) => {
+      const div = document.getElementById('summary-plot-' + m.key);
+      if (!div) return;
+      const container = div.closest('.summary-chart');
+      const { concurrents, seriesByModel, metaByModel } = computeRatioSeries(task, m, aKey, bKey);
+      const hasData = concurrents.length && Object.keys(seriesByModel).length;
+      if (hasData) {
+        anyData = true;
+        const caption = m.better === 'high' ? `${aLabel} / ${bLabel}` : `${bLabel} / ${aLabel}`;
+        const { data, layout } = buildSummaryFigure(
+          concurrents, seriesByModel, metaByModel, blob.colorMap,
+          m.label, caption, blob.referenceRatio, aLabel, bLabel);
+        if (container) container.style.display = '';
+        Plotly.react(div, data, layout, { responsive: true }).then(() => {
+          try { Plotly.Plots.resize(div); } catch (_) {}
+        });
+      } else {
+        try { Plotly.purge(div); } catch (_) {}
+        if (container) container.style.display = 'none';
+      }
+    });
+
+    const empty = document.getElementById('summary-empty');
+    if (empty) empty.style.display = anyData ? 'none' : '';
+  }
+
+  function onModeChange() {
+    const mode = currentMode();
+    const list = endpointsForMode(mode);
+    const [aDef, bDef] = defaultEndpointKeys(mode);
+    fillEndpointSelect(document.getElementById('endpoint-a-select'), mode, list, aDef);
+    fillEndpointSelect(document.getElementById('endpoint-b-select'), mode, list, bDef);
+    renderOverviewCharts();
+  }
+
+  function initOverview() {
+    OVERVIEW.blob = loadSummaryBlob();
+    if (!OVERVIEW.blob) return false;
+
+    const taskSel = document.getElementById('overview-task-select');
+    if (taskSel) {
+      taskSel.innerHTML = '';
+      (OVERVIEW.blob.tasks || []).forEach((t) => {
+        const opt = document.createElement('option');
+        opt.value = t; opt.textContent = t;
+        taskSel.appendChild(opt);
+      });
+      taskSel.addEventListener('change', renderOverviewCharts);
+    }
+
+    const modeSel = document.getElementById('mode-select');
+    if (modeSel) modeSel.addEventListener('change', onModeChange);
+    const aSel = document.getElementById('endpoint-a-select');
+    const bSel = document.getElementById('endpoint-b-select');
+    if (aSel) aSel.addEventListener('change', renderOverviewCharts);
+    if (bSel) bSel.addEventListener('change', renderOverviewCharts);
+
+    onModeChange();  // populate endpoints for the initial mode + first render
+    return true;
+  }
+
+  // Switch between the Overview landing page and the per-model Detail page.
+  function setPage(page) {
+    document.body.dataset.page = page;
+    if (page === 'detail') {
+      showSelectedGraph();
+    } else {
+      // Charts may have been laid out while hidden — refit them once visible.
+      ((OVERVIEW.blob && OVERVIEW.blob.metrics) || []).forEach((m) => {
+        const div = document.getElementById('summary-plot-' + m.key);
+        if (div && div.data) { try { Plotly.Plots.resize(div); } catch (_) {} }
+      });
+    }
   }
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -459,8 +751,15 @@
       sel.addEventListener('change', showSelectedGraph);
     });
 
-    renderSummaryCharts();
-    showSelectedGraph();
+    const hasOverview = initOverview();
+
+    const enterBtn = document.getElementById('enter-detail-btn');
+    const backBtn = document.getElementById('back-to-overview-btn');
+    if (enterBtn) enterBtn.addEventListener('click', () => setPage('detail'));
+    if (backBtn) backBtn.addEventListener('click', () => setPage('overview'));
+
+    const initial = (hasOverview && document.body.dataset.page === 'overview') ? 'overview' : 'detail';
+    setPage(initial);
   });
 
   // ============================================================

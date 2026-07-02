@@ -474,3 +474,56 @@ p{
     overflow: visible;
   }
 }
+
+/* ===== Overview / Detail page navigation ===== */
+/* Show exactly the controls + page that match body[data-page]. */
+body[data-page="overview"] .detail-controls,
+body[data-page="overview"] #back-to-overview-btn,
+body[data-page="overview"] #download-zip-btn,
+body[data-page="overview"] .detail-page{
+  display: none;
+}
+
+body[data-page="detail"] .overview-controls,
+body[data-page="detail"] #enter-detail-btn,
+body[data-page="detail"] .overview-page{
+  display: none;
+}
+
+.overview-controls{
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.detail-controls{
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.page-nav-btn{
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 12px 14px;
+  cursor: pointer;
+
+  border-radius: 12px;
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--control-text);
+  font-size: 15px;
+  font-family: "Favorit_medium", system-ui, sans-serif;
+  outline: none;
+}
+
+.page-nav-btn:hover{
+  border-color: var(--control-border-hover);
+}
+
+.summary-empty{
+  opacity: 0.75;
+  font-style: italic;
+}

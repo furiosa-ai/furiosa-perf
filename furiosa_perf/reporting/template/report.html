@@ -10,7 +10,7 @@
   </head>
 
 
-  <body>
+  <body data-page="{{ 'overview' if summary and summary.blob_json else 'detail' }}">
     <div class="report-layout">
       <aside class="report-sidebar">
         <div class="report-logo"></div>
@@ -19,59 +19,100 @@
         </div>
 
         <div class="controls sidebar-controls">
-          <div class="field"> 
-            <label for="model-select" class="field-label"><p>&nbsp;&nbsp;Model Type</p></label>
-            <div class="select-wrapper">
-              <select id="model-select">
-                {% if summary and summary.charts %}
-                  <option value="__overview__">Overview</option>
-                {% endif %}
-                {% for model in model_list %}
-                  <option value="{{ model }}">{{ model }}</option>
-                {% endfor %}
-              </select>
-              <span class="select-arrow">▼</span>
-            </div>
-          </div>
+          {% if summary and summary.blob_json %}
+          <button id="enter-detail-btn" class="page-nav-btn" type="button">View Detailed Results →</button>
+          <button id="back-to-overview-btn" class="page-nav-btn" type="button">← Back to Overview</button>
 
-          <div class="field" id="task-field">
-            <label for="task-select" class="field-label"><p>&nbsp;&nbsp;Task</p></label>
-            <div class="select-wrapper">
-              <select id="task-select">
-                {% for task in task_list %}
-                  <option value="{{ task }}">{{ task }}</option>
-                {% endfor %}
-              </select>
-              <span class="select-arrow">▼</span>
-            </div>
-          </div>
-
-          {% for item in items %}
-            {% for task in task_list %}
-              {% if task in item.content %}
-              <div class="field token-field"
-                  data-model="{{ item.model }}"
-                  data-task="{{ task }}"
-                  style="display:none;">
-                <label for="token-select-{{ item.model }}-{{ task }}" class="field-label">
-                  <p>&nbsp;&nbsp;{{ item.content[task].key }}</p>
-                </label>
-
-                <div class="select-wrapper">
-                  <select id="token-select-{{ item.model }}-{{ task }}"
-                          class="token-select"
-                          data-model="{{ item.model }}"
-                          data-task="{{ task }}">
-                    {% for oc in (item.content[task].charts or []) %}
-                      <option value="{{ oc.tokens }}">{{ oc.tokens }}</option>
-                    {% endfor %}
-                  </select>
-                  <span class="select-arrow">▼</span>
-                </div>
+          <div class="overview-controls">
+            <div class="field">
+              <label for="overview-task-select" class="field-label"><p>&nbsp;&nbsp;Task</p></label>
+              <div class="select-wrapper">
+                <select id="overview-task-select"></select>
+                <span class="select-arrow">▼</span>
               </div>
-              {% endif %}
+            </div>
+
+            <div class="field">
+              <label for="mode-select" class="field-label"><p>&nbsp;&nbsp;Comparison Mode</p></label>
+              <div class="select-wrapper">
+                <select id="mode-select">
+                  <option value="version">Version comparison</option>
+                  <option value="device">Device comparison</option>
+                </select>
+                <span class="select-arrow">▼</span>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="endpoint-a-select" class="field-label"><p>&nbsp;&nbsp;Endpoint A (reference)</p></label>
+              <div class="select-wrapper">
+                <select id="endpoint-a-select"></select>
+                <span class="select-arrow">▼</span>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="endpoint-b-select" class="field-label"><p>&nbsp;&nbsp;Endpoint B</p></label>
+              <div class="select-wrapper">
+                <select id="endpoint-b-select"></select>
+                <span class="select-arrow">▼</span>
+              </div>
+            </div>
+          </div>
+          {% endif %}
+
+          <div class="detail-controls">
+            <div class="field">
+              <label for="model-select" class="field-label"><p>&nbsp;&nbsp;Model Type</p></label>
+              <div class="select-wrapper">
+                <select id="model-select">
+                  {% for model in model_list %}
+                    <option value="{{ model }}">{{ model }}</option>
+                  {% endfor %}
+                </select>
+                <span class="select-arrow">▼</span>
+              </div>
+            </div>
+
+            <div class="field" id="task-field">
+              <label for="task-select" class="field-label"><p>&nbsp;&nbsp;Task</p></label>
+              <div class="select-wrapper">
+                <select id="task-select">
+                  {% for task in task_list %}
+                    <option value="{{ task }}">{{ task }}</option>
+                  {% endfor %}
+                </select>
+                <span class="select-arrow">▼</span>
+              </div>
+            </div>
+
+            {% for item in items %}
+              {% for task in task_list %}
+                {% if task in item.content %}
+                <div class="field token-field"
+                    data-model="{{ item.model }}"
+                    data-task="{{ task }}"
+                    style="display:none;">
+                  <label for="token-select-{{ item.model }}-{{ task }}" class="field-label">
+                    <p>&nbsp;&nbsp;{{ item.content[task].key }}</p>
+                  </label>
+
+                  <div class="select-wrapper">
+                    <select id="token-select-{{ item.model }}-{{ task }}"
+                            class="token-select"
+                            data-model="{{ item.model }}"
+                            data-task="{{ task }}">
+                      {% for oc in (item.content[task].charts or []) %}
+                        <option value="{{ oc.tokens }}">{{ oc.tokens }}</option>
+                      {% endfor %}
+                    </select>
+                    <span class="select-arrow">▼</span>
+                  </div>
+                </div>
+                {% endif %}
+              {% endfor %}
             {% endfor %}
-          {% endfor %}
+          </div>
 
           <button id="download-zip-btn" type="button">
             Download ⬇
@@ -85,40 +126,50 @@
             Theme
           </button>
           <h1>{{ title }}</h1>
-          <p>
-            LLM inference performance is a key factor that determines both the quality and cost of AI services,
-            yet making fair, apples-to-apples comparisons across hardware platforms remains challenging.
-            Rapid changes in the software stack and hardware-specific optimization points quickly make static benchmarks diverge from real-world deployments.
-          </p>
-          <p>
-            In this report, we evaluate LLM inference on Furiosa AI's RNGD using the furiosa-llm, and on a range of GPUs using vLLM.
-            For each hardware and sofrware platform, we systematically sweep tensor parallel sizes and concurrency levels,
-            and present the results primarily from a throughput perspective to enable a comprehensive view beyond a single headline number.
-            This approach is intended to highlight practical platform characteristics such as scalability, stability under load, and overall efficiency.
-          </p>
-          <div class="thin-line"></div>
 
-          {% if summary and summary.charts %}
-          <section class="summary-section">
-            <h2>RNGD vs RTX Pro 6000 — Performance Ratio (ISL/OSL {{ summary.scenario }})</h2>
+          {% if summary and summary.blob_json %}
+          <section class="overview-page">
             <p>
-              Per-model performance of RNGD (latest furiosa-llm) relative to RTX Pro 6000 (latest vLLM),
-              broken down by concurrency for the {{ summary.scenario }} scenario. Bars are oriented so that
-              a taller bar always means RNGD is better: TPS/User and TPS/Watt are shown as RNGD / RTX Pro 6000,
-              while Median TTFT and Median TPOT are shown as RTX Pro 6000 / RNGD. The dashed line marks 90%.
-              Toggle individual models on or off by clicking their legend entries.
+              LLM inference performance is a key factor that determines both the quality and cost of AI services,
+              yet making fair, apples-to-apples comparisons across hardware platforms remains challenging.
+              Rapid changes in the software stack and hardware-specific optimization points quickly make static benchmarks diverge from real-world deployments.
             </p>
-            <div class="summary-charts">
-              {% for sc in summary.charts %}
-              <div class="graph-inner summary-chart">
-                {{ sc.html | safe }}
-              </div>
-              {% endfor %}
-            </div>
+            <p>
+              In this report, we evaluate LLM inference on Furiosa AI's RNGD using the furiosa-llm, and on a range of GPUs using vLLM.
+              For each hardware and sofrware platform, we systematically sweep tensor parallel sizes and concurrency levels,
+              and present the results primarily from a throughput perspective to enable a comprehensive view beyond a single headline number.
+              This approach is intended to highlight practical platform characteristics such as scalability, stability under load, and overall efficiency.
+            </p>
             <div class="thin-line"></div>
+
+            <section class="summary-section">
+              <h2>Performance Ratio Overview (ISL/OSL {{ summary.scenario }})</h2>
+              <p>
+                Per-model A/B performance ratios for the {{ summary.scenario }} scenario, broken down by concurrency.
+                Pick a <strong>comparison mode</strong> and the two endpoints to compare on the left: in
+                <em>Version comparison</em> both sides are RNGD (furiosa-llm) at different versions, and in
+                <em>Device comparison</em> each side is a device + version. At every concurrency, Endpoint A uses its
+                best-performing device count and Endpoint B is matched to the closest device count, so the ratio compares
+                like-sized systems. Bars are oriented so a taller bar always means <strong>Endpoint A is better</strong>
+                (throughput ratios are A / B; latency ratios are B / A). The dashed reference line marks parity
+                at the configured threshold. Toggle individual models on or off by clicking their legend entries.
+              </p>
+              <div class="summary-charts">
+                {% for m in summary.metrics %}
+                <div class="graph-inner summary-chart" data-metric="{{ m.key }}">
+                  <div class="summary-plot js-plotly-plot" id="summary-plot-{{ m.key }}"></div>
+                </div>
+                {% endfor %}
+              </div>
+              <p class="summary-empty" id="summary-empty" style="display:none;">
+                No comparable data for the selected task and endpoints.
+              </p>
+              <div class="thin-line"></div>
+            </section>
           </section>
           {% endif %}
 
+          <div class="detail-page">
           {% for item in items %}
             <section class="model-section" data-model="{{ item.model }}">
               {% for task in task_list %}
@@ -149,7 +200,7 @@
                       <div class="rack-power-inputs" data-model="{{ item.model }}" data-tokens="{{ oc.tokens }}">
                         <div class="field" style="color: #ffffff;">
                           <div class="panel-title">Insert values below to<br/>further explore</div>
-  
+
                           <div id="power-inputs-{{ item.model }}-{{ oc.tokens }}" class="power-inputs">
                             {% for d in oc.rack_inputs %}
                             <div class="power-row">
@@ -188,7 +239,12 @@
               {% endfor %}
             </section>
           {% endfor %}
+          </div>
         </div>
+
+        {% if summary and summary.blob_json %}
+        <script type="application/json" id="summary-data">{{ summary.blob_json | safe }}</script>
+        {% endif %}
       </main>
     </div>
   </body>
@@ -223,13 +279,9 @@
   function updateTokenFieldVisibility() {
     const m = modelSelect.value;
     const t = taskSelect.value;
-    const isOverview = (m === '__overview__');
-
-    const taskField = document.getElementById('task-field');
-    if (taskField) taskField.style.display = isOverview ? 'none' : '';
 
     document.querySelectorAll('.token-field').forEach(div => {
-      const show = (!isOverview && div.dataset.model === m && div.dataset.task === t);
+      const show = (div.dataset.model === m && div.dataset.task === t);
       div.style.display = show ? '' : 'none';
     });
   }
