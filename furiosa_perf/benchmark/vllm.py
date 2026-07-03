@@ -50,7 +50,7 @@ class VllmPerformanceBenchmark:
         "--result-dir={result_dir}",
         "--ready-check-timeout-sec=0",
         "--trust-remote-code",
-        "--temperatrue=0",
+        "--temperature=0",
     ]
 
     VLLM_COMMANDS: dict[str, list[str]] = {
