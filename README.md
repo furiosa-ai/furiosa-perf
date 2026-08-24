@@ -31,7 +31,11 @@ See [Benchmark Methodology](examples/BENCHMARK.md) for a detailed explanation of
 - **APT**: `python3.12-venv` (used internally to create a venv for the vLLM benchmark tool)
 
 ```bash
-sudo apt-get install -y python3.12-venv
+# ubuntu 22.04
+sudo apt install software-properties-common -y
+sudo add-apt-repository ppa:deadsnakes/ppa -y
+sudo apt update
+sudo apt install python3.12 python3.12-venv -y
 ```
 
 ### Backend prerequisites
