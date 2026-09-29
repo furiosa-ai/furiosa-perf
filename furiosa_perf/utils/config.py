@@ -33,7 +33,8 @@ class VllmServerConfig(APIServerConfig):
 
     def __post_init__(self) -> None:
         """Resolve and validate tensor_parallel_size / devices consistency."""
-        self.devices = str(self.devices)
+        if self.devices is not None:
+            self.devices = str(self.devices)
         if self.tensor_parallel_size is None:
             if self.devices is not None:
                 self.tensor_parallel_size = len(self.devices.split(","))
@@ -63,7 +64,8 @@ class FuriosaLLMServerConfig(APIServerConfig):
 
     def __post_init__(self) -> None:
         """Infer tensor_parallel_size from devices when omitted."""
-        self.devices = str(self.devices)
+        if self.devices is not None:
+            self.devices = str(self.devices)
         if self.tensor_parallel_size is None and self.devices is not None:
             self.tensor_parallel_size = len(self.devices.split(","))
 
