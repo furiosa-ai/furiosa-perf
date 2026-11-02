@@ -9,3 +9,7 @@
   --font: "ABC Favorit", "Pretendard", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "ABC Favorit Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
+
+/* Company logo in the header, in place of the "furiosa-perf" name (internal theme only). */
+.brand-logo { display: block; width: 70px; height: 18px; background: url("furiosa-logo.webp") left center / contain no-repeat; }
+.brand-name { display: none; }
