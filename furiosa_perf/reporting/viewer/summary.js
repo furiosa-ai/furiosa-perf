@@ -106,8 +106,6 @@ PAGES.summary = async function (st) {
       + '</div><div class="bar-vals"><span>' + label(x.r) + '</span><span class="muted">' + label(x.g) + '</span></div></div>';
   }).join('');
 
-  const compared = list.filter((x) => x.ratio !== null);
-  const med = median(compared.map((x) => x.ratio));
   const title = (M.title || M.label) + metricBasis(M, slo, rackKw) + (M.bestN ? (dev === 'best' ? ' · best device count' : ' · ×' + dev + ' both sides') : '') + (M.higher ? '' : ' · lower is better') + (M.point ? ' · pick a model for every batch' : '');
   const servers = '8-card server power (RNGD 3.0 kW, RTX PRO 6000 6.5 kW, H100/H200 10.2 kW assumed)';
   const bound = ' ≥ marks a system still faster than ' + slo + ' TPS per user at its largest measured batch.';
@@ -115,8 +113,7 @@ PAGES.summary = async function (st) {
     : metric === 'rack' ? 'Users at ≥ ' + slo + ' TPS per user that a ' + rackKw + ' kW rack serves, ' + scen + ' ISL/OSL: whole servers per rack from ' + servers + ', × users per server.' + bound
     : M.slo ? 'Users at ≥ ' + slo + ' TPS per user, scaled to an 8-card server (× 8 / devices measured).' + bound : '';
   // Fixed title: what is compared lives in the controls, and in the panel title and legend below.
-  return page('<section class="kpis">' + kpi('Models compared', (M.point ? list.length : compared.length) + (list.length < total ? ' of ' + total : ''))
-    + (M.point ? '' : kpi('RNGD ahead', compared.filter((x) => x.ratio >= 1).length + ' / ' + compared.length, 'var(--accent)') + kpi('Median RNGD advantage', med === null ? '—' : med.toFixed(2) + '×')) + '</section>'
+  return page(''
     + '<section class="panel"><div class="panel-head"><h2>' + esc(title) + '</h2><div class="legend">'
     + '<span><span class="swatch" style="background:var(--c-red-0)"></span>' + esc(platformLabel(rngd)) + '</span>'
     + '<span><span class="swatch" style="background:var(--g-a)"></span>' + esc(gpuLabel) + '</span></div></div>'
