@@ -107,20 +107,32 @@ PAGES.summary = async function (st) {
       + '</div><div class="bar-vals"><span>' + label(x.r) + '</span><span class="muted">' + label(x.g) + '</span></div></div>';
   }).join('');
 
-  const title = (M.title || M.label) + metricBasis(M, slo, rackKw) + (M.bestN ? (dev === 'best' ? ' · best device count' : ' · ×' + dev + ' both sides') : '') + (M.higher ? '' : ' · lower is better') + (M.point ? ' · pick a model for every batch' : '');
+  // Panel heading: what is measured in plain words, then one line of how (conditions, power basis, devices).
   const gHw = gpuHw || (plats[gpu] || {}).hw || '';
-  const servers = '8-card server power (RNGD ' + serverKw('RNGD') + ' kW' + (SERVER_KW[family(gHw)] ? ', ' + FAMILY_NAME[family(gHw)] + ' ' + serverKw(gHw) + ' kW' : '') + ')';
-  const bound = ' ≥ marks a system still faster than ' + slo + ' TPS per user at its largest measured batch.';
-  const caption = metric === 'tpkw' ? 'Tokens per second per kW at ' + slo + ' TPS per user, ' + scen + ' ISL/OSL. Per-device throughput scaled to ' + servers + '.' + bound
-    : metric === 'rack' ? 'Users at ≥ ' + slo + ' TPS per user that a ' + rackKw + ' kW rack serves, ' + scen + ' ISL/OSL: whole servers per rack from ' + servers + ', × users per server.' + bound
-    : M.slo ? 'Users at ≥ ' + slo + ' TPS per user, scaled to an 8-card server (× 8 / devices measured).' + bound : '';
-  // Fixed title: what is compared lives in the controls, and in the panel title and legend below.
+  const servers = '8-card server power: RNGD ' + serverKw('RNGD') + ' kW' + (SERVER_KW[family(gHw)] ? ', ' + FAMILY_NAME[family(gHw)] + ' ' + serverKw(gHw) + ' kW' : '') + '.';
+  const devices = !M.bestN ? '' : dev === 'best' ? ' Each side at its best device count.' : ' ×' + dev + ' on both sides.';
+  const bound = ' ≥: still above ' + slo + ' tok/s per user at the largest batch measured.';
+  const atSlo = 'every user at ≥ ' + slo + ' tok/s';
+  const HEAD = {
+    tpkw: ['Throughput per kW, ' + atSlo, 'Output tokens/s per kW of an 8-card server, read at the batch where each user still gets ' + slo + ' tok/s. ' + servers + devices + bound],
+    rack: ['Users per ' + rackKw + ' kW rack, ' + atSlo, 'Whole 8-card servers that fit in the rack × users per server at the SLO. ' + servers + devices + bound],
+    users: ['Users per 8-card server, ' + atSlo, 'Most concurrent users still at ≥ ' + slo + ' tok/s, scaled to 8 cards (× 8 ÷ devices measured).' + devices + bound],
+    tps: ['Output throughput', 'Output tokens/s as measured on each side\'s devices. Ranked at the peak; pick a model to see every batch.' + devices],
+    total: ['Total throughput (input + output)', 'Input + output tokens/s as measured. Ranked at the peak; pick a model to see every batch.' + devices],
+    out: ['Output throughput per 8-card server', 'Output tokens/s × 8 ÷ devices measured. Ranked at the peak; pick a model to see every batch.' + devices],
+    tpw: ['Output tokens per watt', 'Output tokens/s ÷ card power measured during the run. Ranked at the peak; pick a model to see every batch.' + devices],
+    tpu: ['Speed each user sees', 'Output tokens/s per request (output ÷ batch). Ranked at batch 1; pick a model to see every batch.'],
+    tpot: ['Time per output token', 'Median TPOT in ms, lower is better. Ranked at batch 1; pick a model to see every batch.'],
+    ttft: ['Time to first token', 'Median TTFT in s, lower is better. Ranked at batch 1; pick a model to see every batch.'],
+  }[metric] || [M.title || M.label, ''];
+  const headSub = GEN_TASKS[task] + ', ' + scen + ' ISL/OSL. ' + HEAD[1];
+  // Fixed title: what is compared lives in the controls, and in the panel heading and legend below.
   return page(''
-    + '<section class="panel"><div class="panel-head"><h2>' + esc(title) + '</h2><div class="legend">'
+    + '<section class="panel"><div class="panel-head"><div><h2>' + esc(HEAD[0]) + '</h2><div class="panel-sub">' + esc(headSub) + '</div></div><div class="legend">'
     + '<span><span class="swatch" style="background:var(--c-red-0)"></span>' + esc(platformLabel(rngd)) + '</span>'
     + '<span><span class="swatch" style="background:var(--g-a)"></span>' + esc(gpuLabel) + '</span></div></div>'
     + ((M.point ? byBatch : rows) || '<div class="empty">No RNGD points for this task and ISL/OSL.</div>') + more
-    + (caption ? '<p class="caption">' + esc(caption) + '</p>' : '') + '</section>');
+    + '</section>');
 };
 
 document.addEventListener('click', (e) => {
