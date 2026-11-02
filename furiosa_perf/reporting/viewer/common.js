@@ -246,6 +246,12 @@ async function render() {
 // The measure of a single-point metric (M.point) at every batch, one bar per series in each batch's group,
 // with series[ratio[0]]'s multiple over series[ratio[1]] above the group (> 1: better, whichever way the
 // measure improves). series: [{ name, color, run }]; failed points are left out.
+// A multiple k (> 1: the first side is better) as text. Lower-is-better measures (latency) read as
+// "2.31× faster" / "1.25× slower" rather than a bare inverse ratio that reads like "higher is better".
+function multText(k, higher) {
+  if (higher) return k.toFixed(2) + '×';
+  return k >= 1 ? k.toFixed(2) + '× faster' : (1 / k).toFixed(2) + '× slower';
+}
 function batchChart(M, series, ratio, isl, osl) {
   const val = (s, c) => {
     const p = pointsAt(s.run, isl, osl).filter((q) => q.ok && q.conc === c)[0], v = p ? M.point.f(p, s.run) : null;
@@ -262,21 +268,21 @@ function batchChart(M, series, ratio, isl, osl) {
     const cx = L + slot * (i + 0.5), x0 = cx - bw * series.length / 2;
     const a = x.v[ratio[0]], b = x.v[ratio[1]], k = a > 0 && b > 0 ? (M.higher ? a / b : b / a) : null;
     // The batch's values show on hover (data-tip), over a hit area as wide as its slot.
-    const tip = 'b' + x.c + '\n' + series.map((sr, j) => sr.name + '  ' + (x.v[j] === null ? '—' : fmt(x.v[j]))).join('\n') + (k === null ? '' : '\n' + k.toFixed(2) + '×');
+    const tip = 'b' + x.c + '\n' + series.map((sr, j) => sr.name + '  ' + (x.v[j] === null ? '—' : fmt(x.v[j]))).join('\n') + (k === null ? '' : '\n' + multText(k, M.higher));
     s += '<g class="bgrp" data-tip="' + esc(tip) + '"><rect class="hit" x="' + (cx - slot / 2) + '" y="' + T + '" width="' + slot + '" height="' + (B - T) + '" fill="transparent"/>';
     x.v.forEach((v, j) => {
       if (v !== null) s += '<rect x="' + (x0 + bw * j + 1) + '" y="' + y(v) + '" width="' + (bw - 2) + '" height="' + (B - y(v)) + '" fill="' + series[j].color + '"/>';
     });
     s += '</g>';
     const top = Math.min(...x.v.map((v) => (v === null ? B : y(v))));
-    if (k !== null) s += '<text class="mult-s" x="' + cx + '" y="' + (top - 8) + '" text-anchor="middle" style="fill:' + (k > 1.02 ? 'var(--accent)' : k < 0.98 ? 'var(--muted)' : 'var(--text)') + '">' + k.toFixed(2) + '×</text>';  // ±2%: no change
+    if (k !== null) s += '<text class="mult-s" x="' + cx + '" y="' + (top - 8) + '" text-anchor="middle" style="fill:' + (k > 1.02 ? 'var(--accent)' : k < 0.98 ? 'var(--muted)' : 'var(--text)') + '">' + multText(k, M.higher) + '</text>';  // ±2%: no change
     s += '<text x="' + cx + '" y="' + (B + 18) + '" text-anchor="middle">b' + x.c + '</text>';
   });
   s += '<line x1="' + L + '" x2="' + R + '" y1="' + B + '" y2="' + B + '" stroke="var(--faint)"/>'
     + '<text class="axis-title" transform="translate(14 ' + (T + B) / 2 + ') rotate(-90)" text-anchor="middle">' + esc(M.point.label.toUpperCase()) + '</text>'
     + '<text class="axis-title" x="' + (L + R) / 2 + '" y="' + (H - 4) + '" text-anchor="middle">BATCH (CONCURRENCY)</text>';
   const legend = '<div class="legend">' + series.map((x) => '<span><span class="swatch" style="background:' + x.color + '"></span>' + esc(x.name) + '</span>').join('')
-    + (series.length > 1 ? '<span class="faint">× = ' + esc(series[ratio[0]].name) + ' vs ' + esc(series[ratio[1]].name) + '</span>' : '') + '</div>';
+    + (series.length > 1 ? '<span class="faint">× = ' + esc(series[ratio[0]].name) + ' vs ' + esc(series[ratio[1]].name) + '</span>' : '') + (M.higher ? '' : '<span class="faint" style="margin-left:auto">lower is better</span>') + '</div>';
   return legend + '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="' + esc(M.point.label) + ' by batch">' + s + '</svg>';
 }
 

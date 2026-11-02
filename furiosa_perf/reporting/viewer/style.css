@@ -155,3 +155,5 @@ pre.json { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-br
 .btn { font: 12px var(--font); color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; white-space: nowrap; }
 .btn:hover { border-color: var(--muted); }
 td.own { font-size: 12px; white-space: normal; overflow-wrap: anywhere; min-width: 320px; }
+
+.more { display: flex; justify-content: center; padding: 14px 0 4px; }

@@ -29,6 +29,9 @@ PAGES.summary = async function (st) {
   // Devices: each side's best device count per model, or the same count on both sides.
   const counts = [...new Set(tRuns.map((r) => r.n))].sort((a, b) => a - b);
   const dev = counts.indexOf(+st.dev) >= 0 ? +st.dev : 'best';
+  // How many models to show (best ratio first), so a meeting can stop at the strong ones.
+  const SHOW = [10, 20, 50];
+  const show = SHOW.indexOf(+st.show) >= 0 ? +st.show : 'all';
   const metric = METRICS[st.metric] ? st.metric : 'tpkw';
   const M = METRICS[metric];
 
@@ -39,6 +42,7 @@ PAGES.summary = async function (st) {
     + select('RNGD', 'rngd', rngd, rngdKeys.map(opt))
     + select('Compare with', 'gpu', gpu, gpuOpts.map((k) => (k.indexOf('hw:') === 0 ? { v: k, label: k.slice(3) + ' · newest per model' } : opt(k))))
     + select('Devices', 'dev', String(dev), [{ v: 'best', label: 'Best per side' }].concat(counts.map((n) => ({ v: String(n), label: '×' + n + ' both sides' }))))
+    + select('Show', 'show', String(show), SHOW.map((n) => ({ v: String(n), label: 'Top ' + n })).concat([{ v: 'all', label: 'All models' }]))
     + select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label })))
     + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '') + '</div>';
   if (!rngd || !scen) return '<div class="head"><h1>Summary</h1>' + controls + '</div><div class="status">No RNGD results for this task.</div>';
@@ -65,26 +69,33 @@ PAGES.summary = async function (st) {
     const ratio = !g || !(g.v > 0) || !(r.v > 0) ? null : M.higher ? r.v / g.v : g.v / r.v;
     return { model: m, r: r, g: g, ratio: ratio };
   });
-  list.sort((a, b) => (M.point ? 0 : (b.ratio === null ? -1 : b.ratio) - (a.ratio === null ? -1 : a.ratio)) || a.model.localeCompare(b.model));
+  list.sort((a, b) => (b.ratio === null ? -1 : b.ratio) - (a.ratio === null ? -1 : a.ratio) || a.model.localeCompare(b.model));
+  const total = list.length;
+  if (show !== 'all') list.splice(show);
+  const nextShow = SHOW.filter((n) => n > list.length)[0];
+  const more = list.length < total ? '<div class="more"><button class="button" id="summary-more" data-v="' + (nextShow && nextShow < total ? nextShow : 'all') + '">Show '
+    + (nextShow && nextShow < total ? 'top ' + nextShow : 'all ' + total) + ' · ' + (total - list.length) + ' more</button></div>' : '';
+  // Bar scale: the GPU bar has one fixed length on every row and the RNGD bar is that length × the ratio,
+  // so a row reads as RNGD's multiple of the GPU (the best ratio shown reaches 85% of the track).
+  const maxRatio = Math.max(1, ...list.map((x) => x.ratio || 0));
+  const gpuLen = Math.min(60, Math.max(25, 85 / maxRatio));
 
   const label = (x) => (x ? (x.ge ? '≥' : '') + fmt(x.v) + '  ×' + x.n : '—');
   // No one value (M.point): pick a model from the tiles (the first by default); it is drawn at every batch.
   const sub = (x) => 'RNGD ×' + x.r.n + ' · ' + x.g.run.hw + ' ×' + x.g.n + (gpuHw ? ' · ' + backendLabel(x.g.run.backend) + ' ' + x.g.run.ver : '');
-  const items = list.map((x) => ({ key: x.model, name: x.model, sub: sub(x) })), pick = M.point && list.length ? pickedKey(st, 'pick', items, items[0].key) : null;
+  const items = list.map((x) => ({ key: x.model, name: x.model, sub: sub(x) + (x.ratio === null ? '' : ' · ' + multText(x.ratio, M.higher)) })), pick = M.point && list.length ? pickedKey(st, 'pick', items, items[0].key) : null;
   const x0 = list.filter((x) => x.model === pick)[0];
   const byBatch = !x0 ? '' : pickTiles('pick', items, pick) + '<div class="picked"><h3>' + esc(x0.model) + ' <span class="faint mono">' + esc(sub(x0)) + '</span></h3>'
     + batchChart(M, [{ name: 'RNGD ×' + x0.r.n, color: 'var(--c-red-0)', run: x0.r.run }, { name: x0.g.run.hw + ' ×' + x0.g.n + ' · ' + x0.g.run.ver, color: 'var(--g-a)', run: x0.g.run }], [0, 1], isl, osl) + '</div>';
   const rows = M.point ? '' : list.map((x) => {
-    // Each row is scaled to its own longer bar (models differ in size by 10× or more; the values are on the right).
-    // Bars use up to 85% of the track so the multiplier written past the longer bar still fits.
-    const rowMax = Math.max(x.r.v, x.g ? x.g.v : 0);
-    const rp = rowMax > 0 ? Math.max(0.2, x.r.v / rowMax * 85) : 0, gp = x.g && rowMax > 0 ? Math.max(0.2, x.g.v / rowMax * 85) : 0;
+    // GPU bar fixed, RNGD bar = GPU × ratio (capped at 88% so the multiplier still fits; values are on the right).
+    const gp = x.ratio === null ? 0 : gpuLen, rp = x.ratio === null ? 0 : Math.max(0.2, Math.min(88, gpuLen * x.ratio));
     let ratio = '';
     if (x.ratio !== null) {
       // A sweep that hit its top concurrency only bounds the value, so the ratio is a bound too.
       const bound = x.g.ge && !x.r.ge ? '≤' : x.r.ge && !x.g.ge ? '≥' : '';
       const top = rp <= gp ? 6 : 30;  // on the shorter side's row, just past the longer bar
-      ratio = '<div class="ratio" style="top:' + top + 'px;left:calc(' + Math.max(rp, gp) + '% + 8px);color:' + (x.ratio >= 1 ? 'var(--accent)' : 'var(--title)') + '">' + bound + x.ratio.toFixed(2) + '×</div>';
+      ratio = '<div class="ratio" style="top:' + top + 'px;left:calc(' + Math.max(rp, gp) + '% + 8px);color:' + (x.ratio >= 1 ? 'var(--accent)' : 'var(--title)') + '">' + bound + multText(x.ratio, M.higher) + '</div>';
     }
     const older = gpuHw && x.g.run.ver !== hwNewest ? ' <span class="faint mono" title="not measured on the newest version">· ' + esc(backendLabel(x.g.run.backend) + ' ' + x.g.run.ver) + '</span>' : '';
     return '<div class="bar-row"><div class="name">' + esc(x.model) + older + '</div><div class="bar-track">'
@@ -102,11 +113,15 @@ PAGES.summary = async function (st) {
     : M.slo ? 'Users at ≥ ' + slo + ' TPS per user, scaled to an 8-card server (× 8 / devices measured).' + bound : '';
   return '<div class="head"><div><h1>' + esc(platformLabel(rngd)) + '</h1><div class="sub">vs ' + esc(gpuLabel) + ' · '
     + esc(GEN_TASKS[task].toLowerCase() + ' ' + scen + metricBasis(M, slo, rackKw)) + '</div></div>' + controls + '</div>'
-    + '<section class="kpis">' + kpi('Models compared', M.point ? list.length : compared.length)
+    + '<section class="kpis">' + kpi('Models compared', (M.point ? list.length : compared.length) + (list.length < total ? ' of ' + total : ''))
     + (M.point ? '' : kpi('RNGD ahead', compared.filter((x) => x.ratio >= 1).length + ' / ' + compared.length, 'var(--accent)') + kpi('Median RNGD advantage', med === null ? '—' : med.toFixed(2) + '×')) + '</section>'
     + '<section class="panel"><div class="panel-head"><h2>' + esc(title) + '</h2><div class="legend">'
     + '<span><span class="swatch" style="background:var(--c-red-0)"></span>' + esc(platformLabel(rngd)) + '</span>'
     + '<span><span class="swatch" style="background:var(--g-a)"></span>' + esc(gpuLabel) + '</span></div></div>'
-    + ((M.point ? byBatch : rows) || '<div class="empty">No RNGD points for this task and ISL/OSL.</div>')
+    + ((M.point ? byBatch : rows) || '<div class="empty">No RNGD points for this task and ISL/OSL.</div>') + more
     + (caption ? '<p class="caption">' + esc(caption) + '</p>' : '') + '</section>';
 };
+
+document.addEventListener('click', (e) => {
+  if (e.target.id === 'summary-more') setState({ show: e.target.dataset.v });
+});
