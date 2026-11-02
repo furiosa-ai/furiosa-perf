@@ -365,6 +365,15 @@ function metricText(metric, M, slo, rackKw) {
     ttft: ['Time to first token', 'Median TTFT in s, lower is better.'],
   }[metric] || [M.title || M.label, ''];
 }
+// How much better run b is than run a on a per-batch metric (M.point): the geometric mean, over the batches both
+// measured, of b's value over a's (oriented so > 1 is better). The peak or batch 1 alone misses a release that
+// moved the middle batches. null when they share no batch.
+function batchRatio(M, isl, osl, a, b) {
+  const at = (run) => Object.fromEntries(pointsAt(run, isl, osl).filter((p) => p.ok).map((p) => [p.conc, M.point.f(p, run)]));
+  const va = at(a), vb = at(b), logs = [];
+  Object.keys(va).forEach((c) => { const x = va[c], y = vb[c]; if (x > 0 && y > 0) logs.push(Math.log(M.higher ? y / x : x / y)); });
+  return logs.length ? Math.exp(logs.reduce((s, v) => s + v, 0) / logs.length) : null;
+}
 // Single-value read of a point metric: at the peak for throughputs, at batch 1 for per-user speed and latency.
 function pointRead(metric) { return ['tpu', 'tpot', 'ttft'].indexOf(metric) >= 0 ? 'batch 1' : 'the peak'; }
 

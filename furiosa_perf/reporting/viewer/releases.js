@@ -53,20 +53,24 @@ PAGES.releases = async function (st) {
   });
   vers.sort(cmpVer);
   // Ratio of the newer release to the older, oriented so that > 1 is an improvement.
-  const better = (a, b) => (M.higher ? b.v / a.v : a.v / b.v);
+  // Per-batch metrics compare every batch both releases measured (batchRatio), the others their one value.
+  const better = (k, va, vb) => {
+    const x = M.point ? batchRatio(M, isl, osl, runsOf[k][va], runsOf[k][vb]) : null, a = byRow[k][va], b = byRow[k][vb];
+    return x !== null ? x : M.higher ? b.v / a.v : a.v / b.v;
+  };
   const rows = [];
   Object.keys(byRow).forEach((k) => {
     const vals = byRow[k], steps = {};
     let prev = null, first = null;
     vers.forEach((v) => {
       if (!vals[v]) return;
-      if (prev) steps[v] = better(vals[prev], vals[v]);
+      if (prev) steps[v] = better(k, prev, v);
       if (!first) first = v;
       prev = v;
     });
     if (first === prev) return;  // measured on one release only
     const [model, n] = k.split('|');
-    rows.push({ key: k, model: model, n: +n, vals: vals, steps: steps, total: better(vals[first], vals[prev]), first: first, last: prev });
+    rows.push({ key: k, model: model, n: +n, vals: vals, steps: steps, total: better(k, first, prev), first: first, last: prev });
   });
   const latest = vers[vers.length - 1];
   // A model the latest release did not measure has no latest step: it goes last under that sort.

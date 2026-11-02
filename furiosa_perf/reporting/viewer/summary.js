@@ -67,7 +67,9 @@ PAGES.summary = async function (st) {
   // Only models both sides measured: a model without the compared GPU has nothing to compare.
   const list = Object.keys(best).filter((m) => best[m].r && best[m].g).map((m) => {
     const r = best[m].r, g = best[m].g;
-    const ratio = !g || !(g.v > 0) || !(r.v > 0) ? null : M.higher ? r.v / g.v : g.v / r.v;
+    // Per-batch metrics: the batches both sides measured, averaged (batchRatio); the others: their one value.
+    const perBatch = M.point ? batchRatio(M, isl, osl, g.run, r.run) : null;
+    const ratio = perBatch !== null ? perBatch : !g || !(g.v > 0) || !(r.v > 0) ? null : M.higher ? r.v / g.v : g.v / r.v;
     return { model: m, r: r, g: g, ratio: ratio };
   });
   list.sort((a, b) => (b.ratio === null ? -1 : b.ratio) - (a.ratio === null ? -1 : a.ratio) || a.model.localeCompare(b.model));
