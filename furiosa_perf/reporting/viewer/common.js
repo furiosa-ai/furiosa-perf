@@ -102,6 +102,15 @@ function newestVersions(runs) {
 // Power of a standard 8-card server, kW: RNGD and RTX PRO 6000 as in the published efficiency chart.
 // ponytail: H100/H200 assumed 10.2 kW (HGX), replace with the official figure when there is one.
 const SERVER_KW = { rngd: 3.0, rtx: 6.5, h100: 10.2, h200: 10.2 };
+const FAMILY_NAME = { rngd: 'RNGD', rtx: 'RTX PRO 6000', h100: 'H100', h200: 'H200' };
+// Server power of a device's family: the page's override (state kw_<family>, kept in the link) or the default above.
+function familyKw(fam) { const o = +STATE['kw_' + fam]; return o > 0 ? o : SERVER_KW[fam]; }
+function serverKw(hw) { return familyKw(family(hw)); }
+// One number input per family, for the metrics that divide by server power.
+function serverKwInputs(fams) {
+  return fams.filter((f) => SERVER_KW[f]).map((f) => '<label class="ctl">' + esc(FAMILY_NAME[f]) + ' 8-card server · kW<input type="number" min="0.1" step="0.1" data-k="kw_' + f
+    + '" data-num value="' + familyKw(f) + '"></label>').join('');
+}
 
 function okPts(pts) { return pts.filter((p) => p.ok); }
 function peakPoint(pts) { return okPts(pts).reduce((b, p) => (!b || p.out > b.out ? p : b), null); }
@@ -128,7 +137,7 @@ function usersAtSlo(pts, slo) {
 // Tokens per second per kW of an 8-card server, read off the throughput curve where TPS/user = slo.
 // A curve faster than the SLO even at its highest concurrency only gives a lower bound.
 function tpsPerKwAtSlo(pts, run, slo) {
-  const kw = SERVER_KW[family(run.hw)];
+  const kw = serverKw(run.hw);
   const c = okPts(pts).map((p) => ({ x: p.out / p.conc, y: p.out / run.n * 8 / kw })).sort((a, b) => a.x - b.x);
   if (!kw || !c.length || !(slo > 0)) return null;
   if (slo > c[c.length - 1].x) return { v: 0 };
@@ -144,7 +153,7 @@ function tpsPerKwAtSlo(pts, run, slo) {
 const RACK_KW = 15;
 function usersPerServer(pts, run, slo) { const u = usersAtSlo(pts, slo); return u ? { v: u.v * 8 / run.n, ge: u.ge } : null; }
 function usersPerRack(pts, run, slo, rackKw) {
-  const kw = SERVER_KW[family(run.hw)], u = usersPerServer(pts, run, slo);
+  const kw = serverKw(run.hw), u = usersPerServer(pts, run, slo);
   if (!kw || !u) return null;
   const servers = Math.floor(rackKw / kw + 1e-9);
   return { v: servers * u.v, ge: u.ge, servers: servers, perServer: u.v, kw: kw };
@@ -154,8 +163,8 @@ function usersPerRack(pts, run, slo, rackKw) {
 // bestN: a total scaled to a server, so the best device count of each side is compared. point: a measure
 // taken at every batch rather than reduced to one value.
 const METRICS = {
-  tpkw: { label: 'TPS per kW at SLO', title: 'Token Throughput per Kilowatt', higher: true, bestN: true, slo: true, f: tpsPerKwAtSlo },
-  rack: { label: 'Users per rack at SLO', higher: true, bestN: true, slo: true, rack: true, f: usersPerRack },
+  tpkw: { label: 'TPS per kW at SLO', title: 'Token Throughput per Kilowatt', higher: true, bestN: true, slo: true, kw: true, f: tpsPerKwAtSlo },
+  rack: { label: 'Users per rack at SLO', higher: true, bestN: true, slo: true, rack: true, kw: true, f: usersPerRack },
   users: { label: 'Users at SLO · per 8-card server', higher: true, bestN: true, slo: true, f: usersPerServer },
   // Measures with no one value per run: the pages list the models and draw `point` at every batch.
   // f only picks each side's device count (the best at peak, or at b1).

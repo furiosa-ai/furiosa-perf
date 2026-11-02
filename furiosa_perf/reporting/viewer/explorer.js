@@ -9,7 +9,7 @@ const AXES = {
   tps_user: { label: () => 'TPS / User', axis: 'TPS per user (interactivity)', f: (p) => p.out / p.conc },
   out: { label: () => perServer('Output TPS'), f: (p, r) => scaled(p.out, r) },
   total: { label: () => perServer('Total TPS'), f: (p, r) => scaled(p.total, r) },  // input + output tokens
-  tps_kw: { label: () => 'Tokens per second (TPS) per kW', title: 'Token Throughput per Kilowatt', f: (p, r) => { const kw = SERVER_KW[family(r.hw)]; return kw ? p.out / r.n * 8 / kw : null; } },
+  tps_kw: { label: () => 'Tokens per second (TPS) per kW', title: 'Token Throughput per Kilowatt', f: (p, r) => { const kw = serverKw(r.hw); return kw ? p.out / r.n * 8 / kw : null; } },
   conc: { label: () => 'Concurrency', f: (p) => p.conc },
   ttft50: { label: () => 'TTFT p50 (s)', f: (p) => p.ttft50 },
   ttft99: { label: () => 'TTFT p99 (s)', f: (p) => p.ttft99 },

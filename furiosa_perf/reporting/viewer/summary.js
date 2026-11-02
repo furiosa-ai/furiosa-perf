@@ -43,7 +43,8 @@ PAGES.summary = async function (st) {
     + select('Compare with', 'gpu', gpu, gpuOpts.map((k) => (k.indexOf('hw:') === 0 ? { v: k, label: k.slice(3) + ' · newest per model' } : opt(k))))
     + select('Devices', 'dev', String(dev), [{ v: 'best', label: 'Best per side' }].concat(counts.map((n) => ({ v: String(n), label: '×' + n + ' both sides' })))))
     + group('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] })))
-      + select('ISL / OSL', 'scen', scen, scens) + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : ''))
+      + select('ISL / OSL', 'scen', scen, scens) + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '')
+      + (M.kw ? serverKwInputs(['rngd', family(gpuHw || (plats[gpu] || {}).hw || '')]) : ''))
     + group('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label })))
       + select('Show', 'show', String(show), SHOW.map((n) => ({ v: String(n), label: 'Top ' + n })).concat([{ v: 'all', label: 'All models' }])))
     + '</aside>';
@@ -107,7 +108,8 @@ PAGES.summary = async function (st) {
   }).join('');
 
   const title = (M.title || M.label) + metricBasis(M, slo, rackKw) + (M.bestN ? (dev === 'best' ? ' · best device count' : ' · ×' + dev + ' both sides') : '') + (M.higher ? '' : ' · lower is better') + (M.point ? ' · pick a model for every batch' : '');
-  const servers = '8-card server power (RNGD 3.0 kW, RTX PRO 6000 6.5 kW, H100/H200 10.2 kW assumed)';
+  const gHw = gpuHw || (plats[gpu] || {}).hw || '';
+  const servers = '8-card server power (RNGD ' + serverKw('RNGD') + ' kW' + (SERVER_KW[family(gHw)] ? ', ' + FAMILY_NAME[family(gHw)] + ' ' + serverKw(gHw) + ' kW' : '') + ')';
   const bound = ' ≥ marks a system still faster than ' + slo + ' TPS per user at its largest measured batch.';
   const caption = metric === 'tpkw' ? 'Tokens per second per kW at ' + slo + ' TPS per user, ' + scen + ' ISL/OSL. Per-device throughput scaled to ' + servers + '.' + bound
     : metric === 'rack' ? 'Users at ≥ ' + slo + ' TPS per user that a ' + rackKw + ' kW rack serves, ' + scen + ' ISL/OSL: whole servers per rack from ' + servers + ', × users per server.' + bound
