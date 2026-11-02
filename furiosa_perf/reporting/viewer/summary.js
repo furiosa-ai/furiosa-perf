@@ -1,4 +1,4 @@
-// Summary: RNGD against one GPU platform, one metric per model at one ISL/OSL pair.
+// RNGD vs GPU (#summary): RNGD against one GPU platform, one metric per model at one ISL/OSL pair.
 'use strict';
 
 PAGES.summary = async function (st) {
@@ -45,7 +45,7 @@ PAGES.summary = async function (st) {
     + select('Show', 'show', String(show), SHOW.map((n) => ({ v: String(n), label: 'Top ' + n })).concat([{ v: 'all', label: 'All models' }]))
     + select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label })))
     + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '') + '</div>';
-  if (!rngd || !scen) return '<div class="head"><h1>Summary</h1>' + controls + '</div><div class="status">No RNGD results for this task.</div>';
+  if (!rngd || !scen) return '<div class="head"><h1>RNGD vs GPU</h1>' + controls + '</div><div class="status">No RNGD results for this task.</div>';
 
   const onGpu = (r) => (gpuHw ? r.hw === gpuHw && family(r.hw) !== 'rngd' && (r.shapes || []).indexOf(scen) >= 0 : platformKey(r) === gpu);
   const newestVer = {};  // per model, the newest version measured on the compared GPU
@@ -111,8 +111,8 @@ PAGES.summary = async function (st) {
   const caption = metric === 'tpkw' ? 'Tokens per second per kW at ' + slo + ' TPS per user, ' + scen + ' ISL/OSL. Per-device throughput scaled to ' + servers + '.' + bound
     : metric === 'rack' ? 'Users at ≥ ' + slo + ' TPS per user that a ' + rackKw + ' kW rack serves, ' + scen + ' ISL/OSL: whole servers per rack from ' + servers + ', × users per server.' + bound
     : M.slo ? 'Users at ≥ ' + slo + ' TPS per user, scaled to an 8-card server (× 8 / devices measured).' + bound : '';
-  return '<div class="head"><div><h1>' + esc(platformLabel(rngd)) + '</h1><div class="sub">vs ' + esc(gpuLabel) + ' · '
-    + esc(GEN_TASKS[task].toLowerCase() + ' ' + scen + metricBasis(M, slo, rackKw)) + '</div></div>' + controls + '</div>'
+  // Fixed title: what is compared lives in the controls, and in the panel title and legend below.
+  return '<div class="head"><h1>RNGD vs GPU</h1>' + controls + '</div>'
     + '<section class="kpis">' + kpi('Models compared', (M.point ? list.length : compared.length) + (list.length < total ? ' of ' + total : ''))
     + (M.point ? '' : kpi('RNGD ahead', compared.filter((x) => x.ratio >= 1).length + ' / ' + compared.length, 'var(--accent)') + kpi('Median RNGD advantage', med === null ? '—' : med.toFixed(2) + '×')) + '</section>'
     + '<section class="panel"><div class="panel-head"><h2>' + esc(title) + '</h2><div class="legend">'
