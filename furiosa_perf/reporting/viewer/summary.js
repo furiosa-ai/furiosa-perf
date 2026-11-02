@@ -30,25 +30,22 @@ PAGES.summary = async function (st) {
   const counts = [...new Set(tRuns.map((r) => r.n))].sort((a, b) => a - b);
   const dev = counts.indexOf(+st.dev) >= 0 ? +st.dev : 'best';
   // How many models to show (best ratio first), so a meeting can stop at the strong ones.
-  const SHOW = [10, 20, 50];
-  const show = SHOW.indexOf(+st.show) >= 0 ? +st.show : 'all';
+  const show = showOf(st);
   const metric = METRICS[st.metric] ? st.metric : 'tpkw';
   const M = METRICS[metric];
 
   const opt = (k) => ({ v: k, label: platformLabel(k) });
   // Grouped controls: a sticky side panel on wide screens, a block above the page on narrow ones (style.css).
-  const group = (name, body) => '<div class="side-group"><div class="side-title">' + name + '</div>' + body + '</div>';
-  const controls = '<aside class="side">'
-    + group('Compare', select('RNGD', 'rngd', rngd, rngdKeys.map(opt))
+  const controls = ''
+    + sideGroup('Compare', select('RNGD', 'rngd', rngd, rngdKeys.map(opt))
     + select('Compare with', 'gpu', gpu, gpuOpts.map((k) => (k.indexOf('hw:') === 0 ? { v: k, label: k.slice(3) + ' · newest per model' } : opt(k))))
     + select('Devices', 'dev', String(dev), [{ v: 'best', label: 'Best per side' }].concat(counts.map((n) => ({ v: String(n), label: '×' + n + ' both sides' })))))
-    + group('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] })))
+    + sideGroup('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] })))
       + select('ISL / OSL', 'scen', scen, scens) + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '')
       + (M.kw ? serverKwInputs(['rngd', family(gpuHw || (plats[gpu] || {}).hw || '')]) : ''))
-    + group('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label })))
-      + select('Show', 'show', String(show), SHOW.map((n) => ({ v: String(n), label: 'Top ' + n })).concat([{ v: 'all', label: 'All models' }])))
-    + '</aside>';
-  const page = (body) => '<h1>RNGD vs GPU</h1><div class="with-side">' + controls + '<div class="side-main">' + body + '</div></div>';
+    + sideGroup('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label })))
+      + showSelect(show));
+  const page = (body) => sidePage('RNGD vs GPU', controls, body);
   if (!rngd || !scen) return page('<div class="status">No RNGD results for this task.</div>');
 
   const onGpu = (r) => (gpuHw ? r.hw === gpuHw && family(r.hw) !== 'rngd' && (r.shapes || []).indexOf(scen) >= 0 : platformKey(r) === gpu);
@@ -76,9 +73,7 @@ PAGES.summary = async function (st) {
   list.sort((a, b) => (b.ratio === null ? -1 : b.ratio) - (a.ratio === null ? -1 : a.ratio) || a.model.localeCompare(b.model));
   const total = list.length;
   if (show !== 'all') list.splice(show);
-  const nextShow = SHOW.filter((n) => n > list.length)[0];
-  const more = list.length < total ? '<div class="more"><button class="button" id="summary-more" data-v="' + (nextShow && nextShow < total ? nextShow : 'all') + '">Show '
-    + (nextShow && nextShow < total ? 'top ' + nextShow : 'all ' + total) + ' · ' + (total - list.length) + ' more</button></div>' : '';
+  const more = moreButton(list.length, total);
   // Bar scale: the GPU bar has one fixed length on every row and the RNGD bar is that length × the ratio,
   // so a row reads as RNGD's multiple of the GPU (the best ratio shown reaches 85% of the track).
   const maxRatio = Math.max(1, ...list.map((x) => x.ratio || 0));
@@ -112,19 +107,8 @@ PAGES.summary = async function (st) {
   const servers = M.kw ? ' 8-card server power: RNGD ' + serverKw('RNGD') + ' kW' + (SERVER_KW[family(gHw)] ? ', ' + FAMILY_NAME[family(gHw)] + ' ' + serverKw(gHw) + ' kW' : '') + '.' : '';
   const devices = !M.bestN ? '' : dev === 'best' ? ' Each side at its best device count.' : ' ×' + dev + ' on both sides.';
   const bound = M.slo ? ' ≥: still above ' + slo + ' tok/s per user at the largest batch measured.' : '';
-  const atSlo = 'every user at ≥ ' + slo + ' tok/s';
-  const HEAD = {
-    tpkw: ['Throughput per kW, ' + atSlo, 'Output tokens/s per kW of an 8-card server, read at the batch where each user still gets ' + slo + ' tok/s.'],
-    rack: ['Users per ' + rackKw + ' kW rack, ' + atSlo, 'Whole 8-card servers that fit in the rack × users per server at the SLO (servers rounded down).'],
-    users: ['Users per 8-card server, ' + atSlo, 'Most concurrent users still at ≥ ' + slo + ' tok/s, scaled to 8 cards (× 8 ÷ devices measured).'],
-    tps: ['Output throughput', 'Output tokens/s as measured on each side\'s devices. Ranked at the peak; pick a model to see every batch.'],
-    total: ['Total throughput (input + output)', 'Input + output tokens/s as measured. Ranked at the peak; pick a model to see every batch.'],
-    out: ['Output throughput per 8-card server', 'Output tokens/s × 8 ÷ devices measured. Ranked at the peak; pick a model to see every batch.'],
-    tpw: ['Output tokens per watt', 'Output tokens/s ÷ card power measured during the run. Ranked at the peak; pick a model to see every batch.'],
-    tpu: ['Speed each user sees', 'Output tokens/s per request (output ÷ batch). Ranked at batch 1; pick a model to see every batch.'],
-    tpot: ['Time per output token', 'Median TPOT in ms, lower is better. Ranked at batch 1; pick a model to see every batch.'],
-    ttft: ['Time to first token', 'Median TTFT in s, lower is better. Ranked at batch 1; pick a model to see every batch.'],
-  }[metric] || [M.title || M.label, ''];
+  const HEAD = metricText(metric, M, slo, rackKw);
+  if (M.point) HEAD[1] += ' Ranked at ' + pointRead(metric) + '; pick a model to see every batch.';
   const headSub = GEN_TASKS[task] + ', ' + scen + ' ISL/OSL.' + servers + devices + (M.slo ? ' ≥ = lower bound.' : '');
   // Fixed title: what is compared lives in the controls, and in the panel heading and legend below.
   return page(''
@@ -135,6 +119,3 @@ PAGES.summary = async function (st) {
     + '</section>');
 };
 
-document.addEventListener('click', (e) => {
-  if (e.target.id === 'summary-more') setState({ show: e.target.dataset.v });
-});

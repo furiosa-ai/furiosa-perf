@@ -274,7 +274,7 @@ async function render() {
 // A multiple k (> 1: the first side is better) as text. Lower-is-better measures (latency) read as
 // "2.31× faster" / "1.25× slower" rather than a bare inverse ratio that reads like "higher is better".
 function multText(k, higher) {
-  if (higher) return k.toFixed(2) + '×';
+  if (higher || Math.abs(k - 1) < 0.005) return k.toFixed(2) + '×';  // no "faster"/"slower" for a change that rounds away
   return k >= 1 ? k.toFixed(2) + '× faster' : (1 / k).toFixed(2) + '× slower';
 }
 function batchChart(M, series, ratio, isl, osl) {
@@ -332,6 +332,41 @@ function note(key, short, long) {
     + (long ? '<details class="more-note" data-note="' + key + '"' + (NOTES_OPEN[key] ? ' open' : '') + '><summary>ⓘ How this is calculated</summary><p class="caption">' + esc(long) + '</p></details>' : '') + '</div>';
 }
 document.addEventListener('toggle', (e) => { if (e.target.dataset && e.target.dataset.note) NOTES_OPEN[e.target.dataset.note] = e.target.open; }, true);
+
+// ---- shared page pieces (RNGD vs GPU, Releases) ------------------------------------------------
+// Side panel of grouped controls next to the page body (sticky on wide screens, style.css).
+function sideGroup(name, body) { return '<div class="side-group"><div class="side-title">' + name + '</div>' + body + '</div>'; }
+function sidePage(title, side, body) {
+  return '<h1>' + esc(title) + '</h1><div class="with-side"><aside class="side">' + side + '</aside><div class="side-main">' + body + '</div></div>';
+}
+// How many models a list shows (best first), so a meeting can stop at the strong ones; a button shows the next step.
+const SHOW_STEPS = [10, 20, 50];
+function showOf(st) { return SHOW_STEPS.indexOf(+st.show) >= 0 ? +st.show : 'all'; }
+function showSelect(show) { return select('Show', 'show', String(show), SHOW_STEPS.map((n) => ({ v: String(n), label: 'Top ' + n })).concat([{ v: 'all', label: 'All models' }])); }
+function moreButton(shown, total) {
+  if (shown >= total) return '';
+  const next = SHOW_STEPS.filter((n) => n > shown && n < total)[0];
+  return '<div class="more"><button class="button show-more" data-v="' + (next || 'all') + '">Show ' + (next ? 'top ' + next : 'all ' + total) + ' · ' + (total - shown) + ' more</button></div>';
+}
+document.addEventListener('click', (e) => { if (e.target.classList && e.target.classList.contains('show-more')) setState({ show: e.target.dataset.v }); });
+// A metric in plain words: [title, how it is measured]. Pages add their own conditions and reading notes.
+function metricText(metric, M, slo, rackKw) {
+  const atSlo = 'every user at ≥ ' + slo + ' tok/s';
+  return {
+    tpkw: ['Throughput per kW, ' + atSlo, 'Output tokens/s per kW of an 8-card server, read at the batch where each user still gets ' + slo + ' tok/s.'],
+    rack: ['Users per ' + rackKw + ' kW rack, ' + atSlo, 'Whole 8-card servers that fit in the rack × users per server at the SLO (servers rounded down).'],
+    users: ['Users per 8-card server, ' + atSlo, 'Most concurrent users still at ≥ ' + slo + ' tok/s, scaled to 8 cards (× 8 ÷ devices measured).'],
+    tps: ['Output throughput', 'Output tokens/s as measured on the run\'s devices.'],
+    total: ['Total throughput (input + output)', 'Input + output tokens/s as measured.'],
+    out: ['Output throughput per 8-card server', 'Output tokens/s × 8 ÷ devices measured.'],
+    tpw: ['Output tokens per watt', 'Output tokens/s ÷ card power measured during the run.'],
+    tpu: ['Speed each user sees', 'Output tokens/s per request (output ÷ batch).'],
+    tpot: ['Time per output token', 'Median TPOT in ms, lower is better.'],
+    ttft: ['Time to first token', 'Median TTFT in s, lower is better.'],
+  }[metric] || [M.title || M.label, ''];
+}
+// Single-value read of a point metric: at the peak for throughputs, at batch 1 for per-user speed and latency.
+function pointRead(metric) { return ['tpu', 'tpot', 'ttft'].indexOf(metric) >= 0 ? 'batch 1' : 'the peak'; }
 
 // One-of-many picker drawn as tiles (radio buttons bound to state[key], so the pick is kept in the link).
 // items: [{ key, name, sub }]; returns the picked key (state[key] if it is one of the items, else dflt).

@@ -10,7 +10,7 @@ function tint(r) {
   const a = Math.min(Math.abs(r - 1), 0.2) / 0.2;
   return r > 1 ? 'rgba(226,21,0,' + (0.12 + a * 0.73).toFixed(2) + ')' : 'rgba(169,169,169,' + (0.06 + a * 0.39).toFixed(2) + ')';
 }
-function times(v) { return v === null || v === undefined ? '—' : v.toFixed(2) + '×'; }
+function times(v, higher) { return v === null || v === undefined ? '—' : multText(v, higher !== false); }
 
 PAGES.releases = async function (st) {
   const gen = await generationRuns();
@@ -25,13 +25,13 @@ PAGES.releases = async function (st) {
   const metric = METRICS[st.metric] ? st.metric : 'tpkw';
   const M = METRICS[metric];
   const slo = st.slo > 0 ? st.slo : 20, rackKw = +st.rack > 0 ? +st.rack : RACK_KW;
-  const controls = '<div class="controls">'
-    + select('Devices', 'dev', dev, [{ v: 'all', label: 'All device counts' }].concat(devs.map((n) => ({ v: String(n), label: 'RNGD ×' + n }))))
-    + select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] })))
-    + select('ISL / OSL', 'scen', scen, scens)
-    + select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label })))
-    + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '') + '</div>';
-  if (!scen) return '<h1>Releases</h1>' + controls + '<div class="status">No RNGD results.</div>';
+  const show = showOf(st);
+  const controls = sideGroup('RNGD', select('Devices', 'dev', dev, [{ v: 'all', label: 'All device counts' }].concat(devs.map((n) => ({ v: String(n), label: 'RNGD ×' + n })))))
+    + sideGroup('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] }))) + select('ISL / OSL', 'scen', scen, scens)
+      + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '') + (M.kw ? serverKwInputs(['rngd']) : ''))
+    + sideGroup('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label }))) + showSelect(show));
+  const page = (body) => sidePage('Releases', controls, body);
+  if (!scen) return page('<div class="status">No RNGD results.</div>');
 
   await loadPoints(sel);
   const [isl, osl] = scen.split('/').map(Number);
@@ -70,8 +70,11 @@ PAGES.releases = async function (st) {
   const stepMed = {};
   vers.forEach((v) => { stepMed[v] = median(rows.filter((r) => r.steps[v] !== undefined).map((r) => r.steps[v])); });
   const latest = vers[vers.length - 1], prevVer = vers[vers.length - 2];
-  const latestSteps = rows.filter((r) => r.steps[latest] !== undefined).map((r) => r.steps[latest]);
   const totMed = median(rows.map((r) => r.total));
+  // Medians cover every model; Show only trims the rows listed under them.
+  const total = rows.length;
+  if (show !== 'all') rows.splice(show);
+  const more = moreButton(rows.length, total);
   const short = (v) => v.replace(/^\d{4}\./, '');
 
   const cell = (main, o) => {
@@ -88,46 +91,44 @@ PAGES.releases = async function (st) {
       sub: esc(day(dates[v]).slice(0, 7) + (added.length ? '  ' + added.join(' ') : '')), subColor: added.length ? 'var(--text)' : 'var(--faint)' });
   });
   cells += cell('Total', { cls: 'hdr' });
-  cells += cell('Median', { cls: 'hdr left' }) + cell('', { cls: 'hdr' });
-  vers.forEach((v) => { cells += cell(stepMed[v] === null ? '' : times(stepMed[v]), { cls: 'hdr', weight: 600, color: 'var(--title)', bg: tint(stepMed[v]) }); });
-  cells += cell(totMed === null ? '' : times(totMed), { cls: 'hdr', weight: 600, color: 'var(--title)', bg: tint(totMed) });
+  cells += cell('Median' + (rows.length < total ? ' · all ' + total : ''), { cls: 'hdr left' }) + cell('', { cls: 'hdr' });
+  vers.forEach((v) => { cells += cell(stepMed[v] === null ? '' : times(stepMed[v], M.higher), { cls: 'hdr', weight: 600, color: 'var(--title)', bg: tint(stepMed[v]) }); });
+  cells += cell(totMed === null ? '' : times(totMed, M.higher), { cls: 'hdr', weight: 600, color: 'var(--title)', bg: tint(totMed) });
   rows.forEach((r) => {
     cells += cell(esc(r.model), { cls: 'left' }) + cell('×' + r.n, { color: 'var(--muted)' });
     vers.forEach((v) => {
       const x = r.vals[v], b = r.steps[v];
-      cells += x ? cell((x.ge ? '≥' : '') + fmt(x.v), { bg: tint(b), sub: b === undefined ? '' : times(b), subColor: b > 1.02 ? 'var(--title)' : 'var(--muted)' })
+      cells += x ? cell((x.ge ? '≥' : '') + fmt(x.v), { bg: tint(b), sub: b === undefined ? '' : times(b, M.higher), subColor: b > 1.02 ? 'var(--title)' : 'var(--muted)' })
         : cell('—', { color: 'var(--faint)' });
     });
-    cells += cell(times(r.total), { weight: 600, color: r.total > 1.02 ? 'var(--accent)' : r.total < 0.98 ? 'var(--muted)' : 'var(--text)',
+    cells += cell(times(r.total, M.higher), { weight: 600, color: r.total > 1.02 ? 'var(--accent)' : r.total < 0.98 ? 'var(--muted)' : 'var(--text)',
       sub: esc(short(r.first) + ' → ' + short(r.last)), subColor: 'var(--faint)' });
   });
 
-  const unit = M.label + metricBasis(M, slo, rackKw);
-  const red = (v) => (v > 1.02 ? 'var(--accent)' : 'var(--title)');
+  // Panel heading: the metric in plain words, one line of conditions, the method folded (as on RNGD vs GPU).
+  const HEAD = metricText(metric, M, slo, rackKw);
+  const cond = GEN_TASKS[task] + ', ' + scen + ' ISL/OSL. ' + (dev === 'all' ? 'Every RNGD device count.' : 'RNGD ×' + dev + '.')
+    + (M.kw ? ' 8-card server power: RNGD ' + serverKw('RNGD') + ' kW.' : '') + (M.slo ? ' ≥ = lower bound.' : '');
+  const how = HEAD[1] + (M.point ? ' Pick a model to see every batch, one bar per release.'
+    : ' Each cell is the value on that release; the small figure is the multiple over the previous release that measured the model (' + (M.higher ? 'higher' : 'lower')
+      + ' is better). Total = first measured → latest. The header marks server flags a release turned on (e.g. +overlap = --enable-overlap-scheduling).')
+    + (M.slo ? ' ≥: still above ' + slo + ' tok/s per user at the largest batch measured.' : '');
+  const head = (extra) => '<div class="panel-head"><div><h2>' + esc(HEAD[0] + ' by furiosa-llm release') + '</h2><div class="panel-sub">' + note('releases', cond, how) + '</div></div>' + (extra || '') + '</div>';
   if (M.point) {
     // No one value per release: pick a model from the tiles (the first by default); it is drawn at every batch,
     // one bar per release (oldest first, the newest in the brand red), the newest over the one before above each batch.
-    const sorted = rows.slice().sort((a, b) => a.model.localeCompare(b.model) || a.n - b.n);
+    const sorted = rows;  // best total first, like the table
     const relsOf = (r) => vers.filter((v) => runsOf[r.key][v]), sub = (r) => 'RNGD ×' + r.n + ' · ' + relsOf(r).map(short).join(', ');
     const items = sorted.map((r) => ({ key: r.key, name: r.model, sub: sub(r) })), pick = sorted.length ? pickedKey(st, 'pick', items, items[0].key) : null;
     const r0 = sorted.filter((r) => r.key === pick)[0], rv = r0 ? relsOf(r0) : [];
     const series = rv.map((v, j) => ({ name: short(v), color: 'var(--c-red-' + Math.min(3, rv.length - 1 - j) + ')', run: runsOf[r0.key][v] }));
     const list = !r0 ? '' : pickTiles('pick', items, pick) + '<div class="picked"><h3>' + esc(r0.model) + ' <span class="faint mono">' + esc(sub(r0)) + '</span></h3>'
       + batchChart(M, series, [series.length - 1, series.length - 2], isl, osl) + '</div>';
-    return '<div class="head"><h1>Releases</h1>' + controls + '</div><section class="kpis">' + kpi('Models on two or more releases', rows.length) + '</section>'
-      + '<section class="panel"><div class="panel-head"><h2>' + esc('furiosa-llm releases · ' + unit + ' · ' + scen + ' · pick a model for every batch') + '</h2></div>'
-      + (list || '<div class="empty">No RNGD model was measured on two or more releases for this selection.</div>') + '</section>';
+    return page('<section class="panel">' + head()
+      + (list || '<div class="empty">No RNGD model was measured on two or more releases for this selection.</div>') + more + '</section>');
   }
-  return '<div class="head"><h1>Releases</h1>' + controls + '</div>'
-    + '<section class="kpis">'
-    + kpi('Latest release · ' + (prevVer || '—') + ' → ' + (latest || '—') + ' · median', times(stepMed[latest]), red(stepMed[latest]))
-    + kpi('Models up / down beyond ±2% in ' + (latest || '—') + ' (of ' + latestSteps.length + ')',
-      '<span style="color:var(--accent)">' + latestSteps.filter((v) => v > 1.02).length + '</span><span class="faint" style="font-size:22px"> up · </span>'
-      + '<span class="muted">' + latestSteps.filter((v) => v < 0.98).length + '</span><span class="faint" style="font-size:22px"> down</span>')
-    + kpi('First measured → latest · median of ' + rows.length + ' models', times(totMed), red(totMed)) + '</section>'
-    + '<section class="panel"><div class="panel-head"><h2>' + esc('furiosa-llm releases · ' + unit + ' · ' + scen) + '</h2>'
-    + '<div class="heat-scale"><span class="mono">0.80×</span><span class="ramp"></span><span class="mono">1.20×</span><span>vs previous release</span></div></div>'
+  return page('<section class="panel">' + head('<div class="heat-scale"><span class="mono">0.80×</span><span class="ramp"></span><span class="mono">1.20×</span><span>vs previous release</span></div>')
     + (rows.length ? '<div class="scroll"><div class="heat" role="table" style="grid-template-columns:minmax(220px,1.6fr) 56px repeat(' + vers.length + ',minmax(110px,1fr)) 120px">' + cells + '</div></div>'
       : '<div class="empty">No RNGD model was measured on two or more releases for this selection.</div>')
-    + '<p class="caption">' + esc('Each cell is ' + unit + ' (' + (M.higher ? 'higher' : 'lower') + ' is better); the small figure is the multiple over the previous release that measured the model. The header marks server flags a release turned on (e.g. +overlap = --enable-overlap-scheduling).') + '</p></section>';
+    + more + '</section>');
 };

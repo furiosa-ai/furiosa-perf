@@ -208,3 +208,4 @@ td.own { font-size: 12px; white-space: normal; overflow-wrap: anywhere; min-widt
 .kw-inputs { display: flex; flex-wrap: wrap; gap: 8px; }
 .kw-inputs input[type=number] { width: 92px; }
 .side .kw-inputs .ctl { flex: 1 1 100px; }
+.heat .hdr .sub { white-space: normal; }
