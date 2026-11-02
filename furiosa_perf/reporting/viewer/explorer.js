@@ -221,8 +221,11 @@ PAGES.explorer = async function (st) {
   const tRuns = mRuns.filter((r) => r.task === task);
   const scens = shapeOptions(tRuns);
   const scen = pickShape(st.scen, scens);
-  SCALE8 = st.scale === '8card';
   const xKey = X_KEYS.indexOf(st.x) >= 0 ? st.x : 'tps_user', yKey = Y_KEYS.indexOf(st.y) >= 0 ? st.y : 'tps_kw';
+  // Scale only changes the totals (output/total TPS, power); for any other Y the control is hidden and ignored.
+  const scaleUsed = ['out', 'total', 'power'].indexOf(yKey) >= 0;
+  SCALE8 = scaleUsed && st.scale === '8card';
+  const showRack = st.rackview === 'show';  // off by default: only when the viewer asks for it
   const slo = st.slo > 0 ? st.slo : 20;
   if (!scen) return '<div class="status">No fixed-length generation results.</div>';
   const [isl, osl] = scen.split('/').map(Number);
@@ -291,7 +294,12 @@ PAGES.explorer = async function (st) {
     return { o: o, vals: vals };
   });
   const sloOnX = xKey === 'tps_user';  // the SLO is a TPS/user, so it only means something on that axis
-  if (sloOnX) xmax = Math.max(xmax, slo);
+  const rngdG = plotted.filter((g) => family(g.o.r.hw) === 'rngd')[0], gpuGs = plotted.filter((g) => family(g.o.r.hw) !== 'rngd');
+  const vsG = gpuGs.filter((g) => g.o.r.id === st.vs)[0];  // none picked (the default): no arrow
+  const showVs = sloOnX && !!HIGHER_IS_BETTER[yKey] && !!rngdG && gpuGs.length > 0;
+  // The SLO is shown (input and line) only when something reads it: the RNGD-vs multiplier or the rack chart.
+  const sloUsed = (showVs && !!vsG) || showRack;
+  if (sloOnX && sloUsed) xmax = Math.max(xmax, slo);
   const xt = niceTicks(xmax * 1.02), yt = niceTicks(ymax * 1.05);
   const px = (x) => L + x / xt.top * (R - L), py = (y) => B - y / yt.top * (B - T);
 
@@ -301,7 +309,7 @@ PAGES.explorer = async function (st) {
   const axisTitle = (a) => (a.axis || a.label()).toUpperCase().replace(/KW\b/g, 'kW');
   svg += '<text class="axis-title" x="' + (L + R) / 2 + '" y="' + (H - 4) + '" text-anchor="middle">' + esc(axisTitle(mx)) + '</text>';
   svg += '<text class="axis-title" transform="translate(14 ' + (T + B) / 2 + ') rotate(-90)" text-anchor="middle">' + esc(axisTitle(my)) + '</text>';
-  if (sloOnX) svg += '<line x1="' + px(slo) + '" x2="' + px(slo) + '" y1="' + T + '" y2="' + B + '" stroke="var(--faint)" stroke-dasharray="2 4"/><text x="' + (px(slo) + 6) + '" y="' + (B - 8) + '">SLO ' + slo + '</text>';
+  if (sloOnX && sloUsed) svg += '<line x1="' + px(slo) + '" x2="' + px(slo) + '" y1="' + T + '" y2="' + B + '" stroke="var(--faint)" stroke-dasharray="2 4"/><text x="' + (px(slo) + 6) + '" y="' + (B - 8) + '">SLO ' + slo + '</text>';
 
   // Curves are named in the legend above the chart; every measured point carries its batch size (b = concurrency).
   plotted.forEach((g) => {
@@ -314,10 +322,12 @@ PAGES.explorer = async function (st) {
     });
   });
 
+  // Where each curve crosses the SLO, ringed while the rack chart (read at that point) is beside it.
+  if (sloOnX && showRack) plotted.forEach((g) => {
+    const y = yAtX(g.vals, slo);
+    if (y !== null) svg += '<circle cx="' + px(slo) + '" cy="' + py(y) + '" r="7" fill="none" stroke="' + g.o.color + '" stroke-width="2"/>';
+  });
   // RNGD-vs-GPU multiplier at the SLO: an arrow from the chosen GPU curve up (or down) to the RNGD curve.
-  const rngdG = plotted.filter((g) => family(g.o.r.hw) === 'rngd')[0], gpuGs = plotted.filter((g) => family(g.o.r.hw) !== 'rngd');
-  const vsG = gpuGs.filter((g) => g.o.r.id === st.vs)[0];  // none picked (the default): no arrow
-  const showVs = sloOnX && !!HIGHER_IS_BETTER[yKey] && !!rngdG && gpuGs.length > 0;
   let vsMissing = '';  // the picked comparison has no value at the SLO: said in the caption instead of an arrow
   if (showVs && vsG) {
     const yr = yAtX(rngdG.vals, slo), yg = yAtX(vsG.vals, slo);
@@ -355,8 +365,9 @@ PAGES.explorer = async function (st) {
   const legend = '<div class="legend chart-legend">' + visible.map((o) => '<a class="run-link" title="How this run was measured" href="#run?id=' + encodeURIComponent(o.r.id) + '&scen=' + encodeURIComponent(scen) + '"><svg width="22" height="10" aria-hidden="true"><line x1="1" y1="5" x2="21" y2="5" stroke="' + o.color
     + '" stroke-width="3" stroke-linecap="round" stroke-dasharray="' + o.dash + '"/></svg><b>' + esc(hwName(o.r.hw) + ' ×' + o.r.n + (o.r.layout ? ' ' + o.r.layout : ''))
     + '</b><span class="mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver) + '</span><span class="faint">↗</span></a>').join('') + '</div>';
+  const kwText = [...new Set(visible.map((o) => family(o.r.hw)))].filter((f) => SERVER_KW[f]).map((f) => FAMILY_NAME[f] + ' ' + familyKw(f) + ' kW').join(', ');
   const caption = model + ', ' + isl + '/' + osl + ' ISL/OSL. ' + visible.map((o) => o.label).join(', ') + '.'
-    + (yKey === 'tps_kw' ? ' Per-device throughput scaled to 8-card server power: RNGD 3.0 kW, RTX PRO 6000 6.5 kW, H100/H200 10.2 kW.' : '')
+    + (yKey === 'tps_kw' ? ' Per-device throughput scaled to 8-card server power: ' + kwText + '.' : '')
     + (yKey === 'custom' ? ' y = ' + formula + '.' : '') + vsMissing
     + (SCALE8 ? ' Output TPS, total TPS and power are scaled to an 8-card server (× 8 / devices measured).' : '');
   const subtitle = model + ' · ISL ' + isl + ' / OSL ' + osl + ' · ' + GEN_TASKS[task].toLowerCase(), fileBase = [model, isl + '-' + osl].join('_');
@@ -370,13 +381,13 @@ PAGES.explorer = async function (st) {
   const rRack = racks.filter((x) => family(x.o.r.hw) === 'rngd')[0];
   const gRack = racks.filter((x) => family(x.o.r.hw) !== 'rngd').sort((a, b) => b.users - a.users)[0];  // the best GPU
   // Vertical bars, users per rack on Y. A lower bound (≥) fades out at its top.
-  const RW = 900, RH = 380, rL = 70, rR = 880, rT = 30, rB = 290, yr = niceTicks(Math.max(...racks.map((x) => x.users), 1) * 1.12);
+  const RW = 620, RH = 400, rL = 64, rR = 610, rT = 30, rB = 300, yr = niceTicks(Math.max(...racks.map((x) => x.users), 1) * 1.12);
   const ry = (v) => rB - v / yr.top * (rB - rT), slot = (rR - rL) / Math.max(racks.length, 1), bw = Math.min(80, slot * 0.5);
   let rsvg = '<defs>' + racks.map((x, i) => '<linearGradient id="rg' + i + '" x1="0" y1="1" x2="0" y2="0"><stop offset="0.7" style="stop-color:' + x.o.color + '"/><stop offset="1" style="stop-color:' + x.o.color + ';stop-opacity:0.15"/></linearGradient>').join('') + '</defs>';
   yr.list.forEach((v) => { rsvg += '<line x1="' + rL + '" x2="' + rR + '" y1="' + ry(v) + '" y2="' + ry(v) + '" stroke="var(--grid)"/><text x="' + (rL - 8) + '" y="' + (ry(v) + 4) + '" text-anchor="end">' + fmt(v) + '</text>'; });
   rsvg += '<text class="axis-title" transform="translate(14 ' + (rT + rB) / 2 + ') rotate(-90)" text-anchor="middle">USERS PER RACK AT SLO</text>';
   racks.forEach((x, i) => {
-    const cx = rL + slot * (i + 0.5), y = ry(x.users), name = hwName(x.o.r.hw) + ' ×' + x.o.r.n;
+    const cx = rL + slot * (i + 0.5), y = ry(x.users), name = x.o.r.hw.replace(/-/g, ' ') + ' ×' + x.o.r.n;
     rsvg += '<rect x="' + (cx - bw / 2) + '" y="' + y + '" width="' + bw + '" height="' + (rB - y) + '" rx="2" fill="' + (x.ge ? 'url(#rg' + i + ')' : x.o.color) + '"><title>' + esc(name + ' · ' + x.o.r.ver) + '</title></rect>'
       + '<text class="rack-v" x="' + cx + '" y="' + (y - 8) + '" text-anchor="middle">' + (x.ge ? '≥ ' : '') + fmt(x.users) + '</text>'
       + '<text class="rack-n" x="' + cx + '" y="' + (rB + 20) + '" text-anchor="middle">' + esc(name) + '</text>'
@@ -388,14 +399,13 @@ PAGES.explorer = async function (st) {
     w: RW, h: RH, title: 'Users per rack at SLO', subtitle: subtitle + metricBasis(METRICS.rack, slo, rackKw), legend: [],
     file: (fileBase + '_rack-users_slo' + slo + '_' + rackKw + 'kW').replace(/[^\w.-]+/g, '-'),
   };
-  const showRack = st.rackview === 'show';  // off by default: only when the viewer asks for it
   const rackPanel = '<div class="panel rack"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">Rack capacity at SLO</h2>'
     + '<div class="muted">Users served at ≥ ' + slo + ' TPS per user by one rack, filled with 8-card servers · ISL ' + isl + ' / OSL ' + osl + '</div></div>'
-    + '<div class="controls">' + rackInput(rackKw) + sloInput(slo) + downloads('rack') + '</div></div>'
+    + '<div class="controls">' + rackInput(rackKw) + downloads('rack') + '</div></div>'
     + (rRack && gRack && gRack.users > 0 ? '<div class="rack-mult"><b>' + (gRack.ge ? '≤ ' : '') + (rRack.users / gRack.users).toFixed(2) + '×</b> RNGD vs ' + esc(gRack.o.label)
       + (gRack.ge ? ' <span class="faint">(the GPU value is a lower bound)</span>' : '') + '</div>' : '')
     + (racks.length ? '<svg class="chart rack-chart" data-chart="rack" viewBox="0 0 ' + RW + ' ' + RH + '" width="100%" role="img" aria-label="Users per rack at the SLO">' + rsvg + '</svg>' : '<div class="status">No series with a server power and an SLO result.</div>')
-    + '<p class="caption">Servers per rack = rack power ÷ 8-card server power (RNGD 3.0 kW, RTX PRO 6000 6.5 kW, H100/H200 10.2 kW assumed), rounded down to whole servers. '
+    + '<p class="caption">Servers per rack = rack power ÷ 8-card server power (' + esc(kwText) + '), rounded down to whole servers. '
     + 'Users per server = the most concurrent users still at ≥ ' + slo + ' TPS per user, × 8 ÷ devices measured. ≥: the largest batch measured still met the SLO.</p></div>';
   // Custom Y: name, formula, and a parameter table with one row per hardware × count shown.
   const combos = visible.filter((o, i) => visible.findIndex((x) => x.r.hw === o.r.hw && x.r.n === o.r.n) === i);
@@ -417,13 +427,13 @@ PAGES.explorer = async function (st) {
     + select('ISL / OSL', 'scen', scen, scens)
     + '<div class="ctl">Hardware · backend' + seriesList + '</div>'
     + '</aside><section><div class="controls">' + select('X axis', 'x', xKey, axisOptions(X_KEYS)) + select('Y axis', 'y', yKey, axisOptions(Y_KEYS))
-    + select('Scale', 'scale', SCALE8 ? '8card' : 'measured', [{ v: 'measured', label: 'As measured' }, { v: '8card', label: 'Per 8-card server' }]) + (sloOnX ? sloInput(slo) : '')
+    + (scaleUsed ? select('Scale', 'scale', SCALE8 ? '8card' : 'measured', [{ v: 'measured', label: 'As measured' }, { v: '8card', label: 'Per 8-card server' }]) : '') + (sloUsed ? sloInput(slo) : '')
     + (showVs ? select('× RNGD vs', 'vs', vsG ? vsG.o.r.id : 'none', [{ v: 'none', label: 'None' }].concat(gpuGs.map((g) => ({ v: g.o.r.id, label: g.o.label })))) : '')
     + select('Rack capacity', 'rackview', showRack ? 'show' : 'hide', [{ v: 'hide', label: 'Hide' }, { v: 'show', label: 'Show' }]) + '</div>'
-    + '<div class="panel"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">' + esc(my.title || my.label()) + '</h2><div class="muted">ISL ' + isl + ' / OSL ' + osl + ' · ' + esc(GEN_TASKS[task].toLowerCase()) + '</div></div>'
+    + (showRack ? '<div class="pair">' : '') + '<div class="panel"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">' + esc(my.title || my.label()) + '</h2><div class="muted">ISL ' + isl + ' / OSL ' + osl + ' · ' + esc(GEN_TASKS[task].toLowerCase()) + '</div></div>'
     + downloads('main') + '</div>' + legend
     + '<div class="chart-wrap"><svg class="chart" data-chart="main" viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="' + esc(my.label() + ' against ' + mx.label() + ' for ' + model) + '">' + svg + '<g class="hover"></g></svg><div class="hover-tip" hidden></div></div>'
-    + '<p class="caption">' + esc(caption) + '</p></div>' + (showRack ? rackPanel : '') + customPanel
+    + '<p class="caption">' + esc(caption) + '</p></div>' + (showRack ? rackPanel + '</div>' : '') + customPanel
     + '<div class="panel batches"><div class="panel-head"><h2 style="font-weight:400;font-size:18px">Measured batches</h2><span class="muted">ISL ' + isl + ' / OSL ' + osl + ' · pick a metric, failed points greyed</span></div>'
     + tables + '</div></section></div>';
 };

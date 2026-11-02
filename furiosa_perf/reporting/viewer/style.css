@@ -182,3 +182,6 @@ td.own { font-size: 12px; white-space: normal; overflow-wrap: anywhere; min-widt
   .side .ctl select, .side .ctl input { width: auto; }
 }
 .panel-sub { color: var(--muted); font-size: 13px; margin-top: 6px; max-width: 760px; }
+/* Explorer: the curve chart and the rack chart side by side on wide screens, stacked below 1400px. */
+.pair { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+@media (max-width: 1399px) { .pair { grid-template-columns: 1fr; } }
