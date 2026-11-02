@@ -26,10 +26,13 @@ PAGES.releases = async function (st) {
   const M = METRICS[metric];
   const slo = st.slo > 0 ? st.slo : 20, rackKw = +st.rack > 0 ? +st.rack : RACK_KW;
   const show = showOf(st);
+  // Sort by: total change (first measured → latest, default), the latest release's step, or the size of the total change either way.
+  const SORTS = { total: 'Total', latest: 'Latest release', abs: 'Biggest change (±)' };
+  const sort = SORTS[st.sort] ? st.sort : 'total';
   const controls = sideGroup('RNGD', select('Devices', 'dev', dev, [{ v: 'all', label: 'All device counts' }].concat(devs.map((n) => ({ v: String(n), label: 'RNGD ×' + n })))))
     + sideGroup('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] }))) + select('ISL / OSL', 'scen', scen, scens)
       + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '') + (M.kw ? serverKwInputs(['rngd']) : ''))
-    + sideGroup('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label }))) + showSelect(show));
+    + sideGroup('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label }))) + select('Sort by', 'sort', sort, Object.keys(SORTS).map((k) => ({ v: k, label: SORTS[k] }))) + showSelect(show));
   const page = (body) => sidePage('Releases', controls, body);
   if (!scen) return page('<div class="status">No RNGD results.</div>');
 
@@ -65,9 +68,11 @@ PAGES.releases = async function (st) {
     const [model, n] = k.split('|');
     rows.push({ key: k, model: model, n: +n, vals: vals, steps: steps, total: better(vals[first], vals[prev]), first: first, last: prev });
   });
-  rows.sort((a, b) => b.total - a.total || a.model.localeCompare(b.model));
-
   const latest = vers[vers.length - 1];
+  // A model the latest release did not measure has no latest step: it goes last under that sort.
+  const key = (r) => (sort === 'latest' ? (r.steps[latest] === undefined ? -Infinity : r.steps[latest]) : sort === 'abs' ? Math.abs(Math.log(r.total)) : r.total);
+  rows.sort((a, b) => key(b) - key(a) || a.model.localeCompare(b.model));
+
   const total = rows.length;
   if (show !== 'all') rows.splice(show);
   const more = moreButton(rows.length, total);
@@ -83,10 +88,10 @@ PAGES.releases = async function (st) {
     // Release, date and the server flags it turned on (new ones in white).
     const fl = Object.keys(flags[v] || {}).sort(), pf = j ? flags[vers[j - 1]] || {} : {};
     const added = fl.filter((f) => !pf[f]).map((f) => '+' + (FLAG_LABEL[f] || f));
-    cells += cell(esc(short(v)), { cls: 'hdr', weight: 600, color: v === latest ? 'var(--title)' : 'var(--muted)',
+    cells += cell(esc(short(v)) + (sort === 'latest' && v === latest ? ' ▼' : ''), { cls: 'hdr', weight: 600, color: v === latest ? 'var(--title)' : 'var(--muted)',
       sub: esc(day(dates[v]).slice(0, 7) + (added.length ? '  ' + added.join(' ') : '')), subColor: added.length ? 'var(--text)' : 'var(--faint)' });
   });
-  cells += cell('Total', { cls: 'hdr' });
+  cells += cell('Total' + (sort === 'latest' ? '' : ' ▼'), { cls: 'hdr' });
   rows.forEach((r) => {
     cells += cell(esc(r.model), { cls: 'left' }) + cell('×' + r.n, { color: 'var(--muted)' });
     vers.forEach((v) => {
