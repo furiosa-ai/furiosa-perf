@@ -36,16 +36,19 @@ PAGES.summary = async function (st) {
   const M = METRICS[metric];
 
   const opt = (k) => ({ v: k, label: platformLabel(k) });
-  const controls = '<div class="controls">'
-    + select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] })))
-    + select('ISL / OSL', 'scen', scen, scens)
-    + select('RNGD', 'rngd', rngd, rngdKeys.map(opt))
+  // Grouped controls: a sticky side panel on wide screens, a block above the page on narrow ones (style.css).
+  const group = (name, body) => '<div class="side-group"><div class="side-title">' + name + '</div>' + body + '</div>';
+  const controls = '<aside class="side">'
+    + group('Compare', select('RNGD', 'rngd', rngd, rngdKeys.map(opt))
     + select('Compare with', 'gpu', gpu, gpuOpts.map((k) => (k.indexOf('hw:') === 0 ? { v: k, label: k.slice(3) + ' · newest per model' } : opt(k))))
-    + select('Devices', 'dev', String(dev), [{ v: 'best', label: 'Best per side' }].concat(counts.map((n) => ({ v: String(n), label: '×' + n + ' both sides' }))))
-    + select('Show', 'show', String(show), SHOW.map((n) => ({ v: String(n), label: 'Top ' + n })).concat([{ v: 'all', label: 'All models' }]))
-    + select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label })))
-    + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '') + '</div>';
-  if (!rngd || !scen) return '<div class="head"><h1>RNGD vs GPU</h1>' + controls + '</div><div class="status">No RNGD results for this task.</div>';
+    + select('Devices', 'dev', String(dev), [{ v: 'best', label: 'Best per side' }].concat(counts.map((n) => ({ v: String(n), label: '×' + n + ' both sides' })))))
+    + group('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] })))
+      + select('ISL / OSL', 'scen', scen, scens) + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : ''))
+    + group('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label })))
+      + select('Show', 'show', String(show), SHOW.map((n) => ({ v: String(n), label: 'Top ' + n })).concat([{ v: 'all', label: 'All models' }])))
+    + '</aside>';
+  const page = (body) => '<h1>RNGD vs GPU</h1><div class="with-side">' + controls + '<div class="side-main">' + body + '</div></div>';
+  if (!rngd || !scen) return page('<div class="status">No RNGD results for this task.</div>');
 
   const onGpu = (r) => (gpuHw ? r.hw === gpuHw && family(r.hw) !== 'rngd' && (r.shapes || []).indexOf(scen) >= 0 : platformKey(r) === gpu);
   const newestVer = {};  // per model, the newest version measured on the compared GPU
@@ -112,14 +115,13 @@ PAGES.summary = async function (st) {
     : metric === 'rack' ? 'Users at ≥ ' + slo + ' TPS per user that a ' + rackKw + ' kW rack serves, ' + scen + ' ISL/OSL: whole servers per rack from ' + servers + ', × users per server.' + bound
     : M.slo ? 'Users at ≥ ' + slo + ' TPS per user, scaled to an 8-card server (× 8 / devices measured).' + bound : '';
   // Fixed title: what is compared lives in the controls, and in the panel title and legend below.
-  return '<div class="head"><h1>RNGD vs GPU</h1>' + controls + '</div>'
-    + '<section class="kpis">' + kpi('Models compared', (M.point ? list.length : compared.length) + (list.length < total ? ' of ' + total : ''))
+  return page('<section class="kpis">' + kpi('Models compared', (M.point ? list.length : compared.length) + (list.length < total ? ' of ' + total : ''))
     + (M.point ? '' : kpi('RNGD ahead', compared.filter((x) => x.ratio >= 1).length + ' / ' + compared.length, 'var(--accent)') + kpi('Median RNGD advantage', med === null ? '—' : med.toFixed(2) + '×')) + '</section>'
     + '<section class="panel"><div class="panel-head"><h2>' + esc(title) + '</h2><div class="legend">'
     + '<span><span class="swatch" style="background:var(--c-red-0)"></span>' + esc(platformLabel(rngd)) + '</span>'
     + '<span><span class="swatch" style="background:var(--g-a)"></span>' + esc(gpuLabel) + '</span></div></div>'
     + ((M.point ? byBatch : rows) || '<div class="empty">No RNGD points for this task and ISL/OSL.</div>') + more
-    + (caption ? '<p class="caption">' + esc(caption) + '</p>' : '') + '</section>';
+    + (caption ? '<p class="caption">' + esc(caption) + '</p>' : '') + '</section>');
 };
 
 document.addEventListener('click', (e) => {
