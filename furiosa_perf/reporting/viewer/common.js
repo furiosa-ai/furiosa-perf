@@ -108,8 +108,9 @@ function familyKw(fam) { const o = +STATE['kw_' + fam]; return o > 0 ? o : SERVE
 function serverKw(hw) { return familyKw(family(hw)); }
 // One number input per family, for the metrics that divide by server power.
 function serverKwInputs(fams) {
-  return fams.filter((f) => SERVER_KW[f]).map((f) => '<label class="ctl">' + esc(FAMILY_NAME[f]) + ' 8-card server · kW<input type="number" min="0.1" step="0.1" data-k="kw_' + f
+  const inputs = fams.filter((f) => SERVER_KW[f]).map((f) => '<label class="ctl">' + esc(FAMILY_NAME[f]) + '<input type="number" min="0.1" step="0.1" data-k="kw_' + f
     + '" data-num value="' + familyKw(f) + '"></label>').join('');
+  return inputs ? '<div class="kw-group"><span class="kw-title">8-card server power · kW</span><div class="kw-inputs">' + inputs + '</div></div>' : '';
 }
 
 function okPts(pts) { return pts.filter((p) => p.ok); }
@@ -231,9 +232,16 @@ let STATE = {}, PAGE = 'summary', RENDERING = 0;
 
 function readHash() {
   const [page, query] = location.hash.replace(/^#/, '').split('?');
+  // Server power (kw_<family>) follows the viewer from page to page: a link without it keeps the values set before.
+  const kept = Object.fromEntries(Object.entries(STATE).filter(([k]) => k.indexOf('kw_') === 0));
   PAGE = PAGES[page] ? page : 'summary';
   STATE = Object.fromEntries(new URLSearchParams(query || ''));
   ['slo'].forEach((k) => { if (STATE[k] !== undefined) STATE[k] = +STATE[k]; });
+  const carried = Object.keys(kept).filter((k) => STATE[k] === undefined);
+  if (carried.length) {
+    carried.forEach((k) => { STATE[k] = kept[k]; });
+    history.replaceState(null, '', '#' + PAGE + '?' + new URLSearchParams(STATE).toString());
+  }
 }
 function setState(patch) {
   Object.assign(STATE, patch);

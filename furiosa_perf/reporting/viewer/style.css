@@ -195,3 +195,8 @@ td.own { font-size: 12px; white-space: normal; overflow-wrap: anywhere; min-widt
 .more-note summary::-webkit-details-marker { display: none; }
 .more-note summary:hover { color: var(--text); }
 .more-note[open] summary { margin-bottom: 4px; }
+.kw-group { display: flex; flex-direction: column; gap: 4px; }
+.kw-title { font-size: 12px; color: var(--muted); }
+.kw-inputs { display: flex; flex-wrap: wrap; gap: 8px; }
+.kw-inputs input[type=number] { width: 92px; }
+.side .kw-inputs .ctl { flex: 1 1 100px; }

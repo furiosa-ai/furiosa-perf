@@ -447,7 +447,9 @@ PAGES.explorer = async function (st) {
     + '</aside><section><div class="controls">' + select('X axis', 'x', xKey, axisOptions(X_KEYS)) + select('Y axis', 'y', yKey, axisOptions(Y_KEYS))
     + (scaleUsed ? select('Scale', 'scale', SCALE8 ? '8card' : 'measured', [{ v: 'measured', label: 'As measured' }, { v: '8card', label: 'Per 8-card server' }]) : '') + (sloUsed ? sloInput(slo) : '')
     + (showVs ? select('× RNGD vs', 'vs', vsG ? vsG.o.r.id : 'none', [{ v: 'none', label: 'None' }].concat(gpuGs.map((g) => ({ v: g.o.r.id, label: g.o.label })))) : '')
-    + select('Rack capacity', 'rackview', showRack ? 'show' : 'hide', [{ v: 'hide', label: 'Hide' }, { v: 'show', label: 'Show' }]) + '</div>'
+    + select('Rack capacity', 'rackview', showRack ? 'show' : 'hide', [{ v: 'hide', label: 'Hide' }, { v: 'show', label: 'Show' }])
+    // Server power of each device family on the chart, when a number depends on it (TPS per kW, rack).
+    + (yKey === 'tps_kw' || showRack ? serverKwInputs([...new Set(visible.map((o) => family(o.r.hw)))].sort((a, b) => FAMILY_ORDER[a] - FAMILY_ORDER[b])) : '') + '</div>'
     + '<div class="panel' + (showRack ? ' joined' : '') + '"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">' + esc(my.title || my.label()) + (showRack ? ' <span class="faint">→</span> Users per rack' : '') + '</h2><div class="muted">ISL ' + isl + ' / OSL ' + osl + ' · ' + esc(GEN_TASKS[task].toLowerCase()) + '</div></div>'
     + downloads(showRack ? 'both' : 'main') + '</div>' + legend
     + (showRack ? '<div class="pair"><div class="curve"><div class="col-head"><h3>' + esc(my.title || my.label()) + '</h3>' + downloads('main') + '</div>' : '')
