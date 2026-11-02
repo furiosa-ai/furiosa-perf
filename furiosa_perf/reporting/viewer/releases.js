@@ -67,11 +67,7 @@ PAGES.releases = async function (st) {
   });
   rows.sort((a, b) => b.total - a.total || a.model.localeCompare(b.model));
 
-  const stepMed = {};
-  vers.forEach((v) => { stepMed[v] = median(rows.filter((r) => r.steps[v] !== undefined).map((r) => r.steps[v])); });
-  const latest = vers[vers.length - 1], prevVer = vers[vers.length - 2];
-  const totMed = median(rows.map((r) => r.total));
-  // Medians cover every model; Show only trims the rows listed under them.
+  const latest = vers[vers.length - 1];
   const total = rows.length;
   if (show !== 'all') rows.splice(show);
   const more = moreButton(rows.length, total);
@@ -91,9 +87,6 @@ PAGES.releases = async function (st) {
       sub: esc(day(dates[v]).slice(0, 7) + (added.length ? '  ' + added.join(' ') : '')), subColor: added.length ? 'var(--text)' : 'var(--faint)' });
   });
   cells += cell('Total', { cls: 'hdr' });
-  cells += cell('Median' + (rows.length < total ? ' · all ' + total : ''), { cls: 'hdr left' }) + cell('', { cls: 'hdr' });
-  vers.forEach((v) => { cells += cell(stepMed[v] === null ? '' : times(stepMed[v], M.higher), { cls: 'hdr', weight: 600, color: 'var(--title)', bg: tint(stepMed[v]) }); });
-  cells += cell(totMed === null ? '' : times(totMed, M.higher), { cls: 'hdr', weight: 600, color: 'var(--title)', bg: tint(totMed) });
   rows.forEach((r) => {
     cells += cell(esc(r.model), { cls: 'left' }) + cell('×' + r.n, { color: 'var(--muted)' });
     vers.forEach((v) => {
