@@ -183,5 +183,8 @@ td.own { font-size: 12px; white-space: normal; overflow-wrap: anywhere; min-widt
 }
 .panel-sub { color: var(--muted); font-size: 13px; margin-top: 6px; max-width: 760px; }
 /* Explorer: the curve chart and the rack chart side by side on wide screens, stacked below 1400px. */
-.pair { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+.pair { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: stretch; }
+/* Same height side by side: the rack chart takes the free space, so both captions end on one line. */
+.pair .rack .rack-chart { flex: 1; min-height: 0; }
+.pair > .panel > .caption { margin-top: auto; }
 @media (max-width: 1399px) { .pair { grid-template-columns: 1fr; } }
