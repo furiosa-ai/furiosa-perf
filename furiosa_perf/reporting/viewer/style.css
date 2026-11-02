@@ -182,12 +182,14 @@ td.own { font-size: 12px; white-space: normal; overflow-wrap: anywhere; min-widt
   .side .ctl select, .side .ctl input { width: auto; }
 }
 .panel-sub { color: var(--muted); font-size: 13px; margin-top: 6px; max-width: 760px; }
-/* Explorer: the curve chart and the rack chart side by side on wide screens, stacked below 1400px. */
-.pair { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: stretch; }
-/* Same height side by side: the rack chart takes the free space, so both captions end on one line. */
-.pair .rack .rack-chart { flex: 1; min-height: 0; }
-.pair > .panel > .cap-note { margin-top: auto; }
-@media (max-width: 1399px) { .pair { grid-template-columns: 1fr; } }
+/* Explorer: curve and rack chart in one panel, side by side on wide screens (stacked below 1400px),
+   split by a thin rule; both charts sit on the bottom so their baselines line up. */
+.pair { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 0; align-items: end; }
+.pair > .rack { border-left: 1px solid var(--line); padding-left: 20px; margin-left: 20px; display: flex; flex-direction: column; gap: 8px; }
+.col-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.col-head h3 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0; }
+.rack-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+@media (max-width: 1399px) { .pair { grid-template-columns: 1fr; } .pair > .rack { border-left: 0; padding-left: 0; margin-left: 0; border-top: 1px solid var(--line); padding-top: 16px; margin-top: 16px; } }
 .cap-note { display: flex; flex-direction: column; gap: 4px; }
 .more-note summary { cursor: pointer; color: var(--faint); font-size: 12px; list-style: none; }
 .more-note summary::-webkit-details-marker { display: none; }

@@ -145,8 +145,9 @@ function solidColor(css) {
   return ctx.fillStyle;  // canvas normalises any colour to #rrggbb (or rgba)
 }
 const EXPORTS = {};  // chart name -> { title, subtitle, legend, file, w, h } from the last render
-function chartFile(name) {
-  const src = document.querySelector('svg.chart[data-chart="' + name + '"]'), h = EXPORTS[name], head = 70 + 24 * Math.ceil(h.legend.length / 2);
+// A chart's SVG with every computed style written in, so it renders the same outside the page.
+function resolvedClone(name) {
+  const src = document.querySelector('svg.chart[data-chart="' + name + '"]');
   const clone = src.cloneNode(true), from = src.querySelectorAll('*'), to = clone.querySelectorAll('*');
   from.forEach((el, i) => {
     const cs = getComputedStyle(el), s = to[i].style;
@@ -157,6 +158,12 @@ function chartFile(name) {
     ['stroke-width', 'stroke-dasharray', 'font-family', 'font-size', 'font-weight', 'letter-spacing'].forEach((k) => s.setProperty(k, cs.getPropertyValue(k)));
   });
   clone.querySelectorAll('g.hover').forEach((g) => g.remove());
+  return clone;
+}
+// 'both': the curve and the rack chart side by side in one file, the rack chart scaled to the curve's height.
+function chartFile(name) {
+  const h = EXPORTS[name], head = 70 + 24 * Math.ceil(h.legend.length / 2), parts = h.parts || [name];
+  const src = document.querySelector('svg.chart[data-chart="' + parts[0] + '"]');
   const font = getComputedStyle(document.body).fontFamily.replace(/"/g, "'"), mono = getComputedStyle(src.querySelector('text')).fontFamily.replace(/"/g, "'");
   const txt = (x, y, s, size, fill, fam, extra) => '<text x="' + x + '" y="' + y + '" font-family="' + (fam || font) + '" font-size="' + size + '" fill="' + fill + '"' + (extra || '') + '>' + esc(s) + '</text>';
   const c = (v) => solidColor('var(' + v + ')');
@@ -168,8 +175,14 @@ function chartFile(name) {
       + '<text x="' + (x + 28) + '" y="' + y + '" font-family="' + font + '" font-size="12" fill="' + c('--text') + '"><tspan font-weight="600">' + esc(l.name)
       + '</tspan><tspan dx="8" font-family="' + mono + '" font-size="11" fill="' + c('--muted') + '">' + esc(l.ver) + '</tspan></text>';
   });
-  clone.setAttribute('x', 0); clone.setAttribute('y', head); clone.setAttribute('width', h.w); clone.setAttribute('height', h.h);
-  return out + new XMLSerializer().serializeToString(clone) + '</svg>';
+  let x = 0;
+  parts.forEach((p) => {
+    const e = EXPORTS[p], w = parts.length > 1 ? Math.round(e.w * h.h / e.h) : h.w, clone = resolvedClone(p);
+    clone.setAttribute('x', x); clone.setAttribute('y', head); clone.setAttribute('width', w); clone.setAttribute('height', h.h);
+    out += new XMLSerializer().serializeToString(clone);
+    x += w + 20;
+  });
+  return out + '</svg>';
 }
 // An SVG drawn as an image cannot reach the page's web fonts (a theme's, e.g. ABC Favorit), so the PNG gets
 // the @font-face rules inlined as data URLs. The SVG file keeps the font names, for tools with the fonts installed.
@@ -401,14 +414,17 @@ PAGES.explorer = async function (st) {
     w: RW, h: RH, title: 'Users per rack at SLO', subtitle: subtitle + metricBasis(METRICS.rack, slo, rackKw), legend: [],
     file: (fileBase + '_rack-users_slo' + slo + '_' + rackKw + 'kW').replace(/[^\w.-]+/g, '-'),
   };
-  const rackPanel = '<div class="panel rack"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">Rack capacity at SLO</h2>'
-    + '<div class="muted">Users served at ≥ ' + slo + ' TPS per user by one rack, filled with 8-card servers · ISL ' + isl + ' / OSL ' + osl + '</div></div>'
-    + '<div class="controls">' + rackInput(rackKw) + downloads('rack') + '</div></div>'
+  // Rack column of the shared panel: read off the curve on its left where each curve crosses the SLO.
+  const rackCol = '<div class="rack"><div class="col-head"><h3>Rack capacity at SLO ' + slo + '</h3>' + downloads('rack') + '</div>'
+    + '<div class="rack-row">' + rackInput(rackKw)
     + (rRack && gRack && gRack.users > 0 ? '<div class="rack-mult"><b>' + (gRack.ge ? '≤ ' : '') + (rRack.users / gRack.users).toFixed(2) + '×</b> RNGD vs ' + esc(gRack.o.label)
-      + (gRack.ge ? ' <span class="faint">(the GPU value is a lower bound)</span>' : '') + '</div>' : '')
+      + (gRack.ge ? ' <span class="faint">(GPU value is a lower bound)</span>' : '') + '</div>' : '') + '</div>'
     + (racks.length ? '<svg class="chart rack-chart" data-chart="rack" viewBox="0 0 ' + RW + ' ' + RH + '" width="100%" role="img" aria-label="Users per rack at the SLO">' + rsvg + '</svg>' : '<div class="status">No series with a server power and an SLO result.</div>')
-    + note('rack', '8-card server power: ' + kwText + '. ≥ = lower bound.', 'Servers per rack = rack power ÷ 8-card server power, rounded down to whole servers. '
-      + 'Users per server = the most concurrent users still at ≥ ' + slo + ' TPS per user, × 8 ÷ devices measured. ≥: the largest batch measured still met the SLO.') + '</div>';
+    + '</div>';
+  const rackNote = 'Rack: servers per rack = rack power ÷ 8-card server power, rounded down to whole servers; users per server = the most concurrent users still at ≥ '
+    + slo + ' TPS per user, × 8 ÷ devices measured. ≥: the largest batch measured still met the SLO.';
+  EXPORTS.both = { w: W + 20 + Math.round(RW * H / RH), h: H, title: (my.title || my.label()) + ' → users per ' + rackKw + ' kW rack at SLO ' + slo, subtitle: subtitle,
+    legend: EXPORTS.main.legend, file: (fileBase + '_' + yKey + '_and_rack_slo' + slo + '_' + rackKw + 'kW').replace(/[^\w.-]+/g, '-'), parts: ['main', 'rack'] };
   // Custom Y: name, formula, and a parameter table with one row per hardware × count shown.
   const combos = visible.filter((o, i) => visible.findIndex((x) => x.r.hw === o.r.hw && x.r.n === o.r.n) === i);
   const customPanel = yKey !== 'custom' ? '' : '<div class="panel custom-y"><h2 style="font-weight:400;font-size:18px">Custom Y axis</h2>'
@@ -432,10 +448,12 @@ PAGES.explorer = async function (st) {
     + (scaleUsed ? select('Scale', 'scale', SCALE8 ? '8card' : 'measured', [{ v: 'measured', label: 'As measured' }, { v: '8card', label: 'Per 8-card server' }]) : '') + (sloUsed ? sloInput(slo) : '')
     + (showVs ? select('× RNGD vs', 'vs', vsG ? vsG.o.r.id : 'none', [{ v: 'none', label: 'None' }].concat(gpuGs.map((g) => ({ v: g.o.r.id, label: g.o.label })))) : '')
     + select('Rack capacity', 'rackview', showRack ? 'show' : 'hide', [{ v: 'hide', label: 'Hide' }, { v: 'show', label: 'Show' }]) + '</div>'
-    + (showRack ? '<div class="pair">' : '') + '<div class="panel"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">' + esc(my.title || my.label()) + '</h2><div class="muted">ISL ' + isl + ' / OSL ' + osl + ' · ' + esc(GEN_TASKS[task].toLowerCase()) + '</div></div>'
-    + downloads('main') + '</div>' + legend
+    + '<div class="panel' + (showRack ? ' joined' : '') + '"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">' + esc(my.title || my.label()) + (showRack ? ' <span class="faint">→</span> Users per rack' : '') + '</h2><div class="muted">ISL ' + isl + ' / OSL ' + osl + ' · ' + esc(GEN_TASKS[task].toLowerCase()) + '</div></div>'
+    + downloads(showRack ? 'both' : 'main') + '</div>' + legend
+    + (showRack ? '<div class="pair"><div class="curve"><div class="col-head"><h3>' + esc(my.title || my.label()) + '</h3>' + downloads('main') + '</div>' : '')
     + '<div class="chart-wrap"><svg class="chart" data-chart="main" viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="' + esc(my.label() + ' against ' + mx.label() + ' for ' + model) + '">' + svg + '<g class="hover"></g></svg><div class="hover-tip" hidden></div></div>'
-    + note('explorer', capShort, caption) + '</div>' + (showRack ? rackPanel + '</div>' : '') + customPanel
+    + (showRack ? '</div>' + rackCol + '</div>' : '')
+    + note('explorer', (capShort + (showRack ? (capShort.indexOf('server power') < 0 ? ' 8-card server power: ' + kwText + '.' : '') + ' ≥ = lower bound.' : '')).trim(), caption + (showRack ? ' ' + rackNote : '')) + '</div>'+ customPanel
     + '<div class="panel batches"><div class="panel-head"><h2 style="font-weight:400;font-size:18px">Measured batches</h2><span class="muted">ISL ' + isl + ' / OSL ' + osl + ' · pick a metric, failed points greyed</span></div>'
     + tables + '</div></section></div>';
 };
