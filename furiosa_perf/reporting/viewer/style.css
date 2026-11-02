@@ -46,7 +46,13 @@ nav a.active { color: var(--text); border-bottom-color: var(--accent); font-weig
 .head .sub { color: var(--muted); margin-top: 4px; }
 .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
 .ctl { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-select, input { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-height: 40px; box-sizing: border-box; }
+select, input { font: inherit; color: var(--text); background-color: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; min-height: 40px; box-sizing: border-box; }
+/* Own ▾ arrow with room on the right instead of the browser's arrow at the edge. */
+select { appearance: none; -webkit-appearance: none; padding-right: 34px; cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0h10L5 6z' fill='%23A9A9A9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center; background-size: 10px 6px; }
+select:hover, input:hover { border-color: var(--faint); }
+select:focus, input:focus { outline: none; border-color: var(--accent); }
 input[type=number] { width: 120px; }
 input[type=checkbox] { min-height: 0; }
 .button { display: inline-block; text-decoration: none; color: #fff; background: var(--accent); border-radius: 6px; padding: 10px 14px; border: 0; font: inherit; cursor: pointer; }
@@ -159,8 +165,11 @@ td.own { font-size: 12px; white-space: normal; overflow-wrap: anywhere; min-widt
 .more { display: flex; justify-content: center; padding: 14px 0 4px; }
 
 /* Side panel of controls (RNGD vs GPU): sticky on the left on wide screens, a wrapped block on top below 1200px. */
-.with-side { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 28px; align-items: start; }
-.side { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; display: flex; flex-direction: column; gap: 22px; }
+.with-side { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 28px; align-items: start; }
+.side { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; display: flex; flex-direction: column; gap: 22px;
+  background: var(--panel); border: 1px solid var(--line); padding: 18px; box-sizing: border-box; }
+/* Controls one step lighter than the side panel, which is one step lighter than the page. */
+.side select, .side input { background-color: var(--panel2); }
 .side-group { display: flex; flex-direction: column; gap: 10px; }
 .side-title { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
 .side .ctl select, .side .ctl input { width: 100%; }
