@@ -25,14 +25,16 @@ PAGES.releases = async function (st) {
   const metric = METRICS[st.metric] ? st.metric : 'tpkw';
   const M = METRICS[metric];
   const slo = st.slo > 0 ? st.slo : 20, rackKw = +st.rack > 0 ? +st.rack : RACK_KW;
-  const show = showOf(st);
+  const newestVer = all.map((r) => r.ver).reduce((a, v) => (!a || cmpVer(v, a) > 0 ? v : a), null);
+  const featured = featuredFor(newestVer);
+  const show = showOf(st, featured);
   // Sort by: total change (first measured → latest, default), the latest release's step, or the size of the total change either way.
   const SORTS = { total: 'Total', latest: 'Latest release', abs: 'Biggest change (±)' };
   const sort = SORTS[st.sort] ? st.sort : 'total';
   const controls = sideGroup('RNGD', select('Devices', 'dev', dev, [{ v: 'all', label: 'All device counts' }].concat(devs.map((n) => ({ v: String(n), label: 'RNGD ×' + n })))))
     + sideGroup('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] }))) + select('ISL / OSL', 'scen', scen, scens)
       + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '') + (M.kw ? serverKwInputs(['rngd']) : ''))
-    + sideGroup('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label }))) + select('Sort by', 'sort', sort, Object.keys(SORTS).map((k) => ({ v: k, label: SORTS[k] }))) + showSelect(show));
+    + sideGroup('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label }))) + select('Sort by', 'sort', sort, Object.keys(SORTS).map((k) => ({ v: k, label: SORTS[k] }))) + showSelect(show, featured));
   const page = (body) => sidePage('Releases', controls, body);
   if (!scen) return page('<div class="status">No RNGD results.</div>');
 
@@ -78,8 +80,8 @@ PAGES.releases = async function (st) {
   rows.sort((a, b) => key(b) - key(a) || a.model.localeCompare(b.model));
 
   const total = rows.length;
-  if (show !== 'all') rows.splice(show);
-  const more = moreButton(rows.length, total);
+  applyShow(rows, show, featured);
+  const more = moreButton(rows.length, total, show);
   const short = (v) => v.replace(/^\d{4}\./, '');
 
   const cell = (main, o) => {

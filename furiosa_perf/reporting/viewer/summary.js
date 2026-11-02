@@ -30,7 +30,8 @@ PAGES.summary = async function (st) {
   const counts = [...new Set(tRuns.map((r) => r.n))].sort((a, b) => a - b);
   const dev = counts.indexOf(+st.dev) >= 0 ? +st.dev : 'best';
   // How many models to show (best ratio first), so a meeting can stop at the strong ones.
-  const show = showOf(st);
+  const featured = featuredFor((plats[rngd] || {}).ver);
+  const show = showOf(st, featured);
   const metric = METRICS[st.metric] ? st.metric : 'tpkw';
   const M = METRICS[metric];
 
@@ -44,7 +45,7 @@ PAGES.summary = async function (st) {
       + select('ISL / OSL', 'scen', scen, scens) + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '')
       + (M.kw ? serverKwInputs(['rngd', family(gpuHw || (plats[gpu] || {}).hw || '')]) : ''))
     + sideGroup('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label })))
-      + showSelect(show));
+      + showSelect(show, featured));
   const page = (body) => sidePage('RNGD vs GPU', controls, body);
   if (!rngd || !scen) return page('<div class="status">No RNGD results for this task.</div>');
 
@@ -74,8 +75,8 @@ PAGES.summary = async function (st) {
   });
   list.sort((a, b) => (b.ratio === null ? -1 : b.ratio) - (a.ratio === null ? -1 : a.ratio) || a.model.localeCompare(b.model));
   const total = list.length;
-  if (show !== 'all') list.splice(show);
-  const more = moreButton(list.length, total);
+  applyShow(list, show, featured);
+  const more = moreButton(list.length, total, show);
   // Bar scale: the GPU bar has one fixed length on every row and the RNGD bar is that length × the ratio,
   // so a row reads as RNGD's multiple of the GPU (the best ratio shown reaches 85% of the track).
   const maxRatio = Math.max(1, ...list.map((x) => x.ratio || 0));

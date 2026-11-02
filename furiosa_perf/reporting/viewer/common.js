@@ -10,9 +10,14 @@ async function loadIndex() {
     const r = await fetch('data/index.json');
     if (!r.ok) throw new Error('data/index.json: HTTP ' + r.status);
     DATA.index = (await r.json()).runs;
+    // Featured models (featured.json next to the page, kept outside data/ which a rebuild replaces):
+    // { "default": [model, …], "<RNGD version>": [model, …] }. Optional: without it every list shows all models.
+    try { const f = await fetch('featured.json', { cache: 'no-cache' }); DATA.featured = f.ok ? await f.json() : {}; } catch (e) { DATA.featured = {}; }
   }
   return DATA.index;
 }
+// Featured models for an RNGD version: its own list, else the default one.
+function featuredFor(ver) { const f = DATA.featured || {}; return f[ver] || f.default || []; }
 
 // One point of a fixed-length run, with the fields the pages use. `raw` keeps every recorded value.
 function toPoint(raw) {
@@ -340,12 +345,24 @@ function sidePage(title, side, body) {
   return '<h1>' + esc(title) + '</h1><div class="with-side"><aside class="side">' + side + '</aside><div class="side-main">' + body + '</div></div>';
 }
 // How many models a list shows (best first), so a meeting can stop at the strong ones; a button shows the next step.
+// 'featured' (the default when the page has a featured list) shows only those models, best first.
 const SHOW_STEPS = [10, 20, 50];
-function showOf(st) { return SHOW_STEPS.indexOf(+st.show) >= 0 ? +st.show : 'all'; }
-function showSelect(show) { return select('Show', 'show', String(show), SHOW_STEPS.map((n) => ({ v: String(n), label: 'Top ' + n })).concat([{ v: 'all', label: 'All models' }])); }
-function moreButton(shown, total) {
+function showOf(st, featured) {
+  if (SHOW_STEPS.indexOf(+st.show) >= 0) return +st.show;
+  return st.show === 'all' || !featured.length ? 'all' : 'featured';
+}
+function showSelect(show, featured) {
+  return select('Show', 'show', String(show), (featured.length ? [{ v: 'featured', label: 'Featured models' }] : [])
+    .concat(SHOW_STEPS.map((n) => ({ v: String(n), label: 'Top ' + n }))).concat([{ v: 'all', label: 'All models' }]));
+}
+// Trim a ranked list (in place) to what Show asks for; items carry .model.
+function applyShow(list, show, featured) {
+  if (show === 'featured') { const keep = list.filter((x) => featured.indexOf(x.model) >= 0); list.splice(0, list.length, ...keep); }
+  else if (show !== 'all') list.splice(show);
+}
+function moreButton(shown, total, show) {
   if (shown >= total) return '';
-  const next = SHOW_STEPS.filter((n) => n > shown && n < total)[0];
+  const next = show === 'featured' ? null : SHOW_STEPS.filter((n) => n > shown && n < total)[0];
   return '<div class="more"><button class="button show-more" data-v="' + (next || 'all') + '">Show ' + (next ? 'top ' + next : 'all ' + total) + ' · ' + (total - shown) + ' more</button></div>';
 }
 document.addEventListener('click', (e) => { if (e.target.classList && e.target.classList.contains('show-more')) setState({ show: e.target.dataset.v }); });

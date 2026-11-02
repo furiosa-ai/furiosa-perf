@@ -227,7 +227,8 @@ if (typeof document !== 'undefined') {
 PAGES.explorer = async function (st) {
   const gen = await generationRuns();
   const models = [...new Set(gen.map((r) => r.model))].sort((a, b) => a.localeCompare(b));
-  const model = models.indexOf(st.model) >= 0 ? st.model : models[0];
+  // Default model: the first featured one measured (featured.json), else the first by name.
+  const model = models.indexOf(st.model) >= 0 ? st.model : featuredFor(null).filter((m) => models.indexOf(m) >= 0)[0] || models[0];
   const mRuns = gen.filter((r) => r.model === model);
   const tasks = Object.keys(GEN_TASKS).filter((t) => mRuns.some((r) => r.task === t));
   const task = tasks.indexOf(st.task) >= 0 ? st.task : tasks[0];
