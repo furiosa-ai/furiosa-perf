@@ -308,6 +308,15 @@ function showTip(e) {
   box.style.top = e.clientY + scrollY - box.offsetHeight / 2 + 'px';
 }
 
+// A caption with the conditions always shown and the full explanation folded behind "How this is calculated".
+// Open/closed is kept across re-renders of this visit only, never in the link: a shared page starts folded.
+const NOTES_OPEN = {};
+function note(key, short, long) {
+  return '<div class="cap-note">' + (short ? '<p class="caption">' + esc(short) + '</p>' : '')
+    + (long ? '<details class="more-note" data-note="' + key + '"' + (NOTES_OPEN[key] ? ' open' : '') + '><summary>ⓘ How this is calculated</summary><p class="caption">' + esc(long) + '</p></details>' : '') + '</div>';
+}
+document.addEventListener('toggle', (e) => { if (e.target.dataset && e.target.dataset.note) NOTES_OPEN[e.target.dataset.note] = e.target.open; }, true);
+
 // One-of-many picker drawn as tiles (radio buttons bound to state[key], so the pick is kept in the link).
 // items: [{ key, name, sub }]; returns the picked key (state[key] if it is one of the items, else dflt).
 function pickedKey(st, key, items, dflt) { return items.some((x) => x.key === st[key]) ? st[key] : dflt; }

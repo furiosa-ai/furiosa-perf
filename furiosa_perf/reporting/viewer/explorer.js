@@ -366,9 +366,11 @@ PAGES.explorer = async function (st) {
     + '" stroke-width="3" stroke-linecap="round" stroke-dasharray="' + o.dash + '"/></svg><b>' + esc(hwName(o.r.hw) + ' ×' + o.r.n + (o.r.layout ? ' ' + o.r.layout : ''))
     + '</b><span class="mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver) + '</span><span class="faint">↗</span></a>').join('') + '</div>';
   const kwText = [...new Set(visible.map((o) => family(o.r.hw)))].filter((f) => SERVER_KW[f]).map((f) => FAMILY_NAME[f] + ' ' + familyKw(f) + ' kW').join(', ');
+  // Shown: what changes how the numbers read. Folded: the full description of the chart.
+  const capShort = ((yKey === 'tps_kw' ? '8-card server power: ' + kwText + '.' : '') + (SCALE8 ? ' Scaled to an 8-card server (× 8 ÷ devices).' : '')
+    + (yKey === 'custom' ? ' y = ' + formula + '.' : '') + vsMissing).trim();
   const caption = model + ', ' + isl + '/' + osl + ' ISL/OSL. ' + visible.map((o) => o.label).join(', ') + '.'
     + (yKey === 'tps_kw' ? ' Per-device throughput scaled to 8-card server power: ' + kwText + '.' : '')
-    + (yKey === 'custom' ? ' y = ' + formula + '.' : '') + vsMissing
     + (SCALE8 ? ' Output TPS, total TPS and power are scaled to an 8-card server (× 8 / devices measured).' : '');
   const subtitle = model + ' · ISL ' + isl + ' / OSL ' + osl + ' · ' + GEN_TASKS[task].toLowerCase(), fileBase = [model, isl + '-' + osl].join('_');
   EXPORTS.main = {
@@ -405,8 +407,8 @@ PAGES.explorer = async function (st) {
     + (rRack && gRack && gRack.users > 0 ? '<div class="rack-mult"><b>' + (gRack.ge ? '≤ ' : '') + (rRack.users / gRack.users).toFixed(2) + '×</b> RNGD vs ' + esc(gRack.o.label)
       + (gRack.ge ? ' <span class="faint">(the GPU value is a lower bound)</span>' : '') + '</div>' : '')
     + (racks.length ? '<svg class="chart rack-chart" data-chart="rack" viewBox="0 0 ' + RW + ' ' + RH + '" width="100%" role="img" aria-label="Users per rack at the SLO">' + rsvg + '</svg>' : '<div class="status">No series with a server power and an SLO result.</div>')
-    + '<p class="caption">Servers per rack = rack power ÷ 8-card server power (' + esc(kwText) + '), rounded down to whole servers. '
-    + 'Users per server = the most concurrent users still at ≥ ' + slo + ' TPS per user, × 8 ÷ devices measured. ≥: the largest batch measured still met the SLO.</p></div>';
+    + note('rack', '8-card server power: ' + kwText + '. ≥ = lower bound.', 'Servers per rack = rack power ÷ 8-card server power, rounded down to whole servers. '
+      + 'Users per server = the most concurrent users still at ≥ ' + slo + ' TPS per user, × 8 ÷ devices measured. ≥: the largest batch measured still met the SLO.') + '</div>';
   // Custom Y: name, formula, and a parameter table with one row per hardware × count shown.
   const combos = visible.filter((o, i) => visible.findIndex((x) => x.r.hw === o.r.hw && x.r.n === o.r.n) === i);
   const customPanel = yKey !== 'custom' ? '' : '<div class="panel custom-y"><h2 style="font-weight:400;font-size:18px">Custom Y axis</h2>'
@@ -433,7 +435,7 @@ PAGES.explorer = async function (st) {
     + (showRack ? '<div class="pair">' : '') + '<div class="panel"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">' + esc(my.title || my.label()) + '</h2><div class="muted">ISL ' + isl + ' / OSL ' + osl + ' · ' + esc(GEN_TASKS[task].toLowerCase()) + '</div></div>'
     + downloads('main') + '</div>' + legend
     + '<div class="chart-wrap"><svg class="chart" data-chart="main" viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="' + esc(my.label() + ' against ' + mx.label() + ' for ' + model) + '">' + svg + '<g class="hover"></g></svg><div class="hover-tip" hidden></div></div>'
-    + '<p class="caption">' + esc(caption) + '</p></div>' + (showRack ? rackPanel + '</div>' : '') + customPanel
+    + note('explorer', capShort, caption) + '</div>' + (showRack ? rackPanel + '</div>' : '') + customPanel
     + '<div class="panel batches"><div class="panel-head"><h2 style="font-weight:400;font-size:18px">Measured batches</h2><span class="muted">ISL ' + isl + ' / OSL ' + osl + ' · pick a metric, failed points greyed</span></div>'
     + tables + '</div></section></div>';
 };

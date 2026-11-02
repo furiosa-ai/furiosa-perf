@@ -186,5 +186,10 @@ td.own { font-size: 12px; white-space: normal; overflow-wrap: anywhere; min-widt
 .pair { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: stretch; }
 /* Same height side by side: the rack chart takes the free space, so both captions end on one line. */
 .pair .rack .rack-chart { flex: 1; min-height: 0; }
-.pair > .panel > .caption { margin-top: auto; }
+.pair > .panel > .cap-note { margin-top: auto; }
 @media (max-width: 1399px) { .pair { grid-template-columns: 1fr; } }
+.cap-note { display: flex; flex-direction: column; gap: 4px; }
+.more-note summary { cursor: pointer; color: var(--faint); font-size: 12px; list-style: none; }
+.more-note summary::-webkit-details-marker { display: none; }
+.more-note summary:hover { color: var(--text); }
+.more-note[open] summary { margin-bottom: 4px; }
