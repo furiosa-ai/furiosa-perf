@@ -195,7 +195,15 @@ td.own { font-size: 12px; white-space: normal; overflow-wrap: anywhere; min-widt
 .more-note summary::-webkit-details-marker { display: none; }
 .more-note summary:hover { color: var(--text); }
 .more-note[open] summary { margin-bottom: 4px; }
-.kw-group { display: flex; flex-direction: column; gap: 4px; }
+.kw-group { display: flex; flex-direction: column; gap: 6px; }
+.kw-group summary { cursor: pointer; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.kw-group summary::-webkit-details-marker { display: none; }
+.kw-line { font-size: 13px; color: var(--text); }
+.kw-edit { color: var(--faint); font-size: 12px; margin-left: 6px; }
+.kw-group summary:hover .kw-edit { color: var(--text); }
+.kw-group[open] .kw-edit { display: none; }
+.kw-group .changed { color: var(--accent); }
+.kw-inputs input.changed { border-color: var(--accent); }
 .kw-title { font-size: 12px; color: var(--muted); }
 .kw-inputs { display: flex; flex-wrap: wrap; gap: 8px; }
 .kw-inputs input[type=number] { width: 92px; }

@@ -108,9 +108,17 @@ function familyKw(fam) { const o = +STATE['kw_' + fam]; return o > 0 ? o : SERVE
 function serverKw(hw) { return familyKw(family(hw)); }
 // One number input per family, for the metrics that divide by server power.
 function serverKwInputs(fams) {
-  const inputs = fams.filter((f) => SERVER_KW[f]).map((f) => '<label class="ctl">' + esc(FAMILY_NAME[f]) + '<input type="number" min="0.1" step="0.1" data-k="kw_' + f
-    + '" data-num value="' + familyKw(f) + '"></label>').join('');
-  return inputs ? '<div class="kw-group"><span class="kw-title">8-card server power · kW</span><div class="kw-inputs">' + inputs + '</div></div>' : '';
+  // Folded to one line of values; open to edit. Opens by itself when a value differs from its default,
+  // which is then marked, so a page showing a non-default assumption says so.
+  fams = fams.filter((f) => SERVER_KW[f]);
+  if (!fams.length) return '';
+  const changed = (f) => familyKw(f) !== SERVER_KW[f];
+  const inputs = fams.map((f) => '<label class="ctl">' + esc(FAMILY_NAME[f]) + '<input type="number" min="0.1" step="0.1" data-k="kw_' + f
+    + '" data-num value="' + familyKw(f) + '"' + (changed(f) ? ' class="changed"' : '') + '></label>').join('');
+  const line = fams.map((f) => '<span' + (changed(f) ? ' class="changed"' : '') + '>' + esc(FAMILY_NAME[f]) + ' ' + familyKw(f) + '</span>').join(' · ');
+  const open = fams.some(changed) || NOTES_OPEN.kw;
+  return '<details class="kw-group" data-note="kw"' + (open ? ' open' : '') + '><summary><span class="kw-title">8-card server power · kW</span>'
+    + '<span class="kw-line">' + line + ' <span class="kw-edit">✎ Edit</span></span></summary><div class="kw-inputs">' + inputs + '</div></details>';
 }
 
 function okPts(pts) { return pts.filter((p) => p.ok); }
