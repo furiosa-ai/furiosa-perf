@@ -72,7 +72,7 @@ def server_command(server: Server) -> tuple[list[str], dict[str, str]]:
     """
     argv = [str(server.executable), "serve", server.model, "--host", server.host, "--port", str(server.port)]
     env = {key: value for key, value in os.environ.items() if key not in FOREIGN_PYTHON_VARS}
-    env["PATH"] = f"{server.env / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+    env["PATH"] = f"{server.executable.parent}{os.pathsep}{env.get('PATH', '')}"
     env["PYTHONUNBUFFERED"] = "1"
 
     parallel = server.parallel

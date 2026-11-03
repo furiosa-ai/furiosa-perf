@@ -144,7 +144,7 @@ devices: 0,1,2,3
 | `model` | — (required) | Hugging Face model ID or local path to serve |
 | `devices` | — (required) | Device indices to serve on, e.g. `0,1,2,3` |
 | `parallel` | `{tp: <number of devices>}` | Split of the devices into tensor (`tp`), pipeline (`pp`) and data (`dp`) parallelism, in units of devices; `tp * pp * dp` must equal the device count and one of them may be omitted |
-| `env` | the environment furiosa-perf runs in | Python environment whose `bin/<backend>` is launched; the recorded backend version is read from it |
+| `env` | the environment furiosa-perf runs in | Python environment whose `bin/<backend>` is launched (`local/bin/<backend>` on a Debian/Ubuntu system Python, where pip puts scripts in `/usr/local/bin`); the recorded backend version is read from it |
 | `host` | `0.0.0.0` | Server bind address |
 | `port` | `8000` | Server port |
 

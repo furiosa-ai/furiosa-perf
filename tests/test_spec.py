@@ -84,3 +84,15 @@ def test_parse_server_rejects_invalid_configs(overrides: dict[str, object], mess
     """Each error names the offending key so the config can be fixed without reading code."""
     with pytest.raises(ValueError, match=message):
         parse_server(server_config(**overrides), ENV)
+
+
+def test_system_python_finds_the_backend_in_local_bin(tmp_path: Path) -> None:
+    """pip on a Debian/Ubuntu system Python (sys.prefix /usr) installs scripts to /usr/local/bin."""
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "python3").touch()
+    (tmp_path / "local" / "bin").mkdir(parents=True)
+    (tmp_path / "local" / "bin" / "furiosa-llm").touch()
+    server = parse_server(server_config(), tmp_path)
+
+    assert server.executable == tmp_path / "local" / "bin" / "furiosa-llm"
+    assert server.python == tmp_path / "bin" / "python3"

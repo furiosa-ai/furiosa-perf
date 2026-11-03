@@ -125,13 +125,22 @@ class Server:
 
     @property
     def executable(self) -> Path:
-        """The backend's command-line entry point inside :attr:`env`."""
-        return self.env / "bin" / self.backend
+        """The backend's command-line entry point inside :attr:`env`.
+
+        ``bin/`` of the environment, or ``local/bin/`` where pip puts scripts on a
+        Debian/Ubuntu system Python (``env`` ``/usr``, the scripts in ``/usr/local/bin``).
+        """
+        return _first_existing(self.env / "bin" / self.backend, self.env / "local" / "bin" / self.backend)
 
     @property
     def python(self) -> Path:
-        """The interpreter of :attr:`env`."""
-        return self.env / "bin" / "python"
+        """The interpreter of :attr:`env` (``bin/python``, or ``bin/python3`` where there is no ``python``)."""
+        return _first_existing(self.env / "bin" / "python", self.env / "bin" / "python3")
+
+
+def _first_existing(*paths: Path) -> Path:
+    """The first of ``paths`` that exists, else the first (for the error message)."""
+    return next((path for path in paths if path.exists()), paths[0])
 
 
 def parse_devices(raw: Any) -> list[int]:
