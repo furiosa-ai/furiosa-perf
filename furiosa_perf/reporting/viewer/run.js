@@ -1,5 +1,5 @@
-// Run details: how one run was measured. The server command, the client command of every batch (the part
-// all batches share once, then what each one changed), what the client recorded, and the environment.
+// Run details: how one run was measured. The server command, the client command of every batch (the selected
+// batch's full command, then what each batch changed), what the client recorded, and the environment.
 // Opened from the Explorer's legend and the Data page (#run?id=…&scen=…).
 'use strict';
 
@@ -21,14 +21,10 @@ function argsOf(command) {
 // One option per line, for reading.
 function shellLines(args) { return args.map((a, i) => (i && a.startsWith('-') ? ' \\\n    ' : i ? ' ' : '') + a).join(''); }
 
-const RUN_OPEN = {};  // run id | point -> full command shown
+// Clicking a batch shows its full command in the box above the table (#run?…&b=<batch>).
 document.addEventListener('click', (e) => {
-  const tr = e.target.closest && e.target.closest('tr.cmd-toggle');
-  if (!tr || e.target.closest('[data-copy]')) return;
-  const id = tr.dataset.run + '|' + tr.dataset.cmd, row = tr.nextElementSibling, open = !RUN_OPEN[id];
-  RUN_OPEN[id] = open;
-  tr.classList.toggle('open', open);
-  if (row && row.classList.contains('cmd-row')) row.hidden = !open;
+  const tr = e.target.closest && e.target.closest('tr.cmd-pick');
+  if (tr) setState({ b: tr.dataset.b });
 });
 
 function copyButton(text, label) { return '<button class="btn" data-copy="' + esc(text) + '">' + esc(label || 'Copy') + '</button>'; }
@@ -61,24 +57,22 @@ PAGES.run = async function (st) {
   const cmds = pts.map(cmdOf).filter(Boolean), lists = cmds.map(argsOf);
   const shared = lists.length ? lists[0].filter((a) => lists.every((l) => l.indexOf(a) >= 0)) : [];
   const pcols = [...new Set(pts.flatMap((p) => Object.keys(params[key(p)] || {})))];
-  // Clicking a batch with a command opens its full command right under it (kept open across re-renders).
-  const ncols = 3 + (cmds.length ? 1 : 0) + pcols.length - 1;
+  // The selected batch (the first with a command by default) has its full command shown above the table.
+  const withCmd = pts.filter(cmdOf), picked = withCmd.filter((p) => String(p.conc) === st.b)[0] || withCmd[0];
   const rows = pts.map((p) => {
-    const c = cmdOf(p), own = c ? argsOf(c).filter((a) => shared.indexOf(a) < 0) : [], pr = params[key(p)] || {}, k = key(p), open = !!RUN_OPEN[run.id + '|' + k];
-    const full = c ? '<tr class="cmd-row"' + (open ? '' : ' hidden') + ' data-cmd-of="' + esc(k) + '"><td colspan="' + ncols + '"><pre class="cmd">' + esc(shellLines(argsOf(c))) + '</pre></td></tr>' : '';
-    return '<tr class="' + (p.ok ? '' : 'faint') + (c ? ' cmd-toggle' + (open ? ' open' : '') : '') + '"' + (c ? ' data-cmd="' + esc(k) + '" data-run="' + esc(run.id) + '" title="Show the full command"' : '') + '><td class="num">' + (c ? '<span class="caret">▸</span> ' : '') + 'b' + p.conc + '</td>'
+    const c = cmdOf(p), own = c ? argsOf(c).filter((a) => shared.indexOf(a) < 0) : [], pr = params[key(p)] || {};
+    return '<tr class="' + (p.ok ? '' : 'faint') + (c ? ' cmd-pick' + (p === picked ? ' sel' : '') : '') + '"' + (c ? ' data-b="' + p.conc + '" title="Show the full command"' : '') + '><td class="num">b' + p.conc + '</td>'
       + (cmds.length ? '<td class="mono own">' + (c ? esc(own.join('  ')) : '<span class="faint">not recorded</span>') + '</td>' : '')
-      + pcols.map((k) => '<td class="num">' + esc(pr[k] === undefined ? '' : typeof pr[k] === 'number' && !Number.isInteger(pr[k]) ? fmt(pr[k]) : String(pr[k])) + '</td>').join('')
-      + '<td>' + (c ? copyButton(c) : '') + '</td></tr>' + full;
+      + pcols.map((k) => '<td class="num">' + esc(pr[k] === undefined ? '' : typeof pr[k] === 'number' && !Number.isInteger(pr[k]) ? fmt(pr[k]) : String(pr[k])) + '</td>').join('') + '</tr>';
   }).join('');
   const missing = pts.length - cmds.length;
   const clientPanel = '<section class="panel"><div class="panel-head"><h2>Benchmark</h2><span class="muted">' + esc(run.client || (cmds.length && /bench serve/.test(cmds[0]) ? 'vllm bench serve' : '')) + '</span></div>'
     + pickTiles('scen', shapes.map((s) => ({ key: s, name: s, sub: 'ISL / OSL' })), scen)
-    + (cmds.length ? '<div class="muted" style="font-size:12px">Shared by every batch of ' + esc(scen) + '</div><pre class="cmd">' + esc(shellLines(shared)) + '</pre>'
+    + (picked ? '<div class="cmd-head"><span class="muted">Full command of b' + picked.conc + ' · ' + esc(scen) + ' — click a batch below to switch</span>' + copyButton(cmdOf(picked)) + '</div><pre class="cmd">' + esc(shellLines(argsOf(cmdOf(picked)))) + '</pre>'
       : '<div class="note">This run did not record its client command; the table shows what the client recorded about each batch instead.</div>')
     + (missing > 0 && cmds.length ? '<div class="note">' + missing + ' of ' + pts.length + ' batches have no recorded command.</div>' : '')
     + '<div class="scroll"><table class="list"><thead><tr><th class="num">Batch</th>' + (cmds.length ? '<th>Options of this batch</th>' : '')
-    + pcols.map((k) => '<th class="num">' + esc(k) + '</th>').join('') + '<th></th></tr></thead><tbody>' + rows + '</tbody></table></div></section>';
+    + pcols.map((k) => '<th class="num">' + esc(k) + '</th>').join('') + '</tr></thead><tbody>' + rows + '</tbody></table></div></section>';
 
   const env = d.environment || {};
   const envPanel = '<section class="panel"><div class="panel-head"><h2>Environment</h2></div>'
