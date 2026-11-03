@@ -10,7 +10,7 @@ async function loadIndex() {
     const r = await fetch('data/index.json');
     if (!r.ok) throw new Error('data/index.json: HTTP ' + r.status);
     DATA.index = (await r.json()).runs;
-    // Featured models (featured.json next to the page, kept outside data/ which a rebuild replaces):
+    // Featured models (featured.json next to the page, copied from the viewer with the rest; edit it there):
     // { "default": [model, …], "<RNGD version>": [model, …] }. Optional: without it every list shows all models.
     try { const f = await fetch('featured.json', { cache: 'no-cache' }); DATA.featured = f.ok ? await f.json() : {}; } catch (e) { DATA.featured = {}; }
   }
@@ -336,7 +336,6 @@ function note(key, short, long) {
   return '<div class="cap-note">' + (short ? '<p class="caption">' + esc(short) + '</p>' : '')
     + (long ? '<details class="more-note" data-note="' + key + '"' + (NOTES_OPEN[key] ? ' open' : '') + '><summary>ⓘ How this is calculated</summary><p class="caption">' + esc(long) + '</p></details>' : '') + '</div>';
 }
-document.addEventListener('toggle', (e) => { if (e.target.dataset && e.target.dataset.note) NOTES_OPEN[e.target.dataset.note] = e.target.open; }, true);
 
 // ---- shared page pieces (RNGD vs GPU, Releases) ------------------------------------------------
 // Side panel of grouped controls next to the page body (sticky on wide screens, style.css).
@@ -365,7 +364,6 @@ function moreButton(shown, total, show) {
   const next = show === 'featured' ? null : SHOW_STEPS.filter((n) => n > shown && n < total)[0];
   return '<div class="more"><button class="button show-more" data-v="' + (next || 'all') + '">Show ' + (next ? 'top ' + next : 'all ' + total) + ' · ' + (total - shown) + ' more</button></div>';
 }
-document.addEventListener('click', (e) => { if (e.target.classList && e.target.classList.contains('show-more')) setState({ show: e.target.dataset.v }); });
 // A metric in plain words: [title, how it is measured]. Pages add their own conditions and reading notes.
 function metricText(metric, M, slo, rackKw) {
   const atSlo = 'every user at ≥ ' + slo + ' tok/s';
@@ -413,6 +411,8 @@ function start() {
     else if (el.dataset.toggle !== undefined) PAGES[PAGE].toggle(el.dataset.toggle, el.checked);
   });
   document.addEventListener('pointermove', showTip);
+  document.addEventListener('toggle', (e) => { if (e.target.dataset && e.target.dataset.note) NOTES_OPEN[e.target.dataset.note] = e.target.open; }, true);  // folded notes stay open across re-renders
+  document.addEventListener('click', (e) => { if (e.target.classList && e.target.classList.contains('show-more')) setState({ show: e.target.dataset.v }); });  // Show more (moreButton)
   window.addEventListener('hashchange', () => { readHash(); render(); });
   readHash();
   render();

@@ -1,1 +1,0 @@
-../furiosa_perf/reporting/viewer/data.js
