@@ -209,3 +209,8 @@ td.own { font-size: 12px; white-space: normal; overflow-wrap: anywhere; min-widt
 .kw-inputs input[type=number] { width: 92px; }
 .side .kw-inputs .ctl { flex: 1 1 100px; }
 .heat .hdr .sub { white-space: normal; }
+tr.cmd-toggle { cursor: pointer; }
+tr.cmd-toggle:hover td { background: var(--panel2); }
+tr.cmd-toggle .caret { display: inline-block; color: var(--faint); transition: transform .12s; }
+tr.cmd-toggle.open .caret { transform: rotate(90deg); color: var(--text); }
+tr.cmd-row td { padding-top: 0; }

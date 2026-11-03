@@ -21,6 +21,16 @@ function argsOf(command) {
 // One option per line, for reading.
 function shellLines(args) { return args.map((a, i) => (i && a.startsWith('-') ? ' \\\n    ' : i ? ' ' : '') + a).join(''); }
 
+const RUN_OPEN = {};  // run id | point -> full command shown
+document.addEventListener('click', (e) => {
+  const tr = e.target.closest && e.target.closest('tr.cmd-toggle');
+  if (!tr || e.target.closest('[data-copy]')) return;
+  const id = tr.dataset.run + '|' + tr.dataset.cmd, row = tr.nextElementSibling, open = !RUN_OPEN[id];
+  RUN_OPEN[id] = open;
+  tr.classList.toggle('open', open);
+  if (row && row.classList.contains('cmd-row')) row.hidden = !open;
+});
+
 function copyButton(text, label) { return '<button class="btn" data-copy="' + esc(text) + '">' + esc(label || 'Copy') + '</button>'; }
 
 function envRows(env) {
@@ -51,12 +61,15 @@ PAGES.run = async function (st) {
   const cmds = pts.map(cmdOf).filter(Boolean), lists = cmds.map(argsOf);
   const shared = lists.length ? lists[0].filter((a) => lists.every((l) => l.indexOf(a) >= 0)) : [];
   const pcols = [...new Set(pts.flatMap((p) => Object.keys(params[key(p)] || {})))];
+  // Clicking a batch with a command opens its full command right under it (kept open across re-renders).
+  const ncols = 3 + (cmds.length ? 1 : 0) + pcols.length - 1;
   const rows = pts.map((p) => {
-    const c = cmdOf(p), own = c ? argsOf(c).filter((a) => shared.indexOf(a) < 0) : [], pr = params[key(p)] || {};
-    return '<tr' + (p.ok ? '' : ' class="faint"') + '><td class="num">b' + p.conc + '</td>'
+    const c = cmdOf(p), own = c ? argsOf(c).filter((a) => shared.indexOf(a) < 0) : [], pr = params[key(p)] || {}, k = key(p), open = !!RUN_OPEN[run.id + '|' + k];
+    const full = c ? '<tr class="cmd-row"' + (open ? '' : ' hidden') + ' data-cmd-of="' + esc(k) + '"><td colspan="' + ncols + '"><pre class="cmd">' + esc(shellLines(argsOf(c))) + '</pre></td></tr>' : '';
+    return '<tr class="' + (p.ok ? '' : 'faint') + (c ? ' cmd-toggle' + (open ? ' open' : '') : '') + '"' + (c ? ' data-cmd="' + esc(k) + '" data-run="' + esc(run.id) + '" title="Show the full command"' : '') + '><td class="num">' + (c ? '<span class="caret">▸</span> ' : '') + 'b' + p.conc + '</td>'
       + (cmds.length ? '<td class="mono own">' + (c ? esc(own.join('  ')) : '<span class="faint">not recorded</span>') + '</td>' : '')
       + pcols.map((k) => '<td class="num">' + esc(pr[k] === undefined ? '' : typeof pr[k] === 'number' && !Number.isInteger(pr[k]) ? fmt(pr[k]) : String(pr[k])) + '</td>').join('')
-      + '<td>' + (c ? copyButton(c) : '') + '</td></tr>';
+      + '<td>' + (c ? copyButton(c) : '') + '</td></tr>' + full;
   }).join('');
   const missing = pts.length - cmds.length;
   const clientPanel = '<section class="panel"><div class="panel-head"><h2>Benchmark</h2><span class="muted">' + esc(run.client || (cmds.length && /bench serve/.test(cmds[0]) ? 'vllm bench serve' : '')) + '</span></div>'
