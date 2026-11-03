@@ -1,0 +1,11 @@
+/* Furiosa theme: ABC Favorit (Dinamo, licensed to Furiosa; internal use only, not part of the furiosa-perf repo).
+   Hangul and other scripts Favorit lacks fall back to Pretendard / the system font. */
+@font-face { font-family: "ABC Favorit"; src: url("fonts/ABCFavorit-Light.otf") format("opentype"); font-weight: 300; font-display: swap; }
+@font-face { font-family: "ABC Favorit"; src: url("fonts/ABCFavorit-Regular.otf") format("opentype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "ABC Favorit"; src: url("fonts/ABCFavorit-Medium.otf") format("opentype"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "ABC Favorit"; src: url("fonts/ABCFavorit-Bold.otf") format("opentype"); font-weight: 600 700; font-display: swap; }
+@font-face { font-family: "ABC Favorit Mono"; src: url("fonts/ABCFavoritMono-Regular.otf") format("opentype"); font-weight: 100 900; font-display: swap; }
+:root {
+  --font: "ABC Favorit", "Pretendard", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "ABC Favorit Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}

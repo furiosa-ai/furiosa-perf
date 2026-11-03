@@ -1,0 +1,26 @@
+# Fixed-length baseline for embedding models: random inputs of a fixed length,
+# closed-loop concurrency sweep.
+kind: baseline
+task: embedding
+client: vllm-bench
+
+server:
+  no-enable-prefix-caching: true
+
+args:
+  backend: openai-embeddings
+  endpoint: /v1/embeddings
+  dataset-name: random
+  trust-remote-code: true
+  percentile-metrics: e2el
+  metric-percentiles: 25,50,75,90,95,99
+
+matrix:
+  - {random-input-len: 256, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256, 512]}
+  - {random-input-len: 512, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256, 512]}
+  - {random-input-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64, 128]}
+  - {random-input-len: 2048, max-concurrency: [1, 4, 8, 16, 32, 64, 128]}
+  - {random-input-len: 4096, max-concurrency: [1, 4, 8, 16, 32, 64]}
+  - {random-input-len: 8192, max-concurrency: [1, 4, 8, 16, 32]}
+  - {random-input-len: 16384, max-concurrency: [1, 4, 8, 16]}
+  - {random-input-len: 32768, max-concurrency: [1, 4, 8, 16]}

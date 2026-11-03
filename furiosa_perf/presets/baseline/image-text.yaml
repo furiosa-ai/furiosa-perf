@@ -1,0 +1,36 @@
+# Fixed-length baseline for vision-language generation: one 256x256 random image per
+# request plus random text, exactly OSL output tokens each, closed-loop concurrency sweep.
+kind: baseline
+task: image-text
+client: vllm-bench
+
+server:
+  no-enable-prefix-caching: true
+  reasoning-parser: null  # Thinking models: keep thinking tokens in `content`, which the client counts
+
+args:
+  backend: openai-chat
+  endpoint: /v1/chat/completions
+  dataset-name: random-mm
+  random-range-ratio: 0
+  random-mm-base-items-per-request: 1
+  random-mm-bucket-config: "{(256, 256, 1): 1.0}"
+  random-mm-limit-mm-per-prompt: '{"image": 1}'
+  ignore-eos: true
+  temperature: 0
+  trust-remote-code: true
+  percentile-metrics: ttft,tpot,itl,e2el
+  metric-percentiles: 25,50,75,90,95,99
+
+# Text lengths are the total input lengths (128, 512, 1024, ...) minus the ~74 tokens a
+# 256x256 image takes in Qwen3-VL, so the whole prompt matches the text lengths.
+matrix:
+  - {random-input-len: 54, random-output-len: 128, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256, 512]}
+  - {random-input-len: 438, random-output-len: 512, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256, 512]}
+  - {random-input-len: 950, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256]}
+  - {random-input-len: 1974, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256]}
+  - {random-input-len: 7094, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64]}
+  - {random-input-len: 15286, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32]}
+  - {random-input-len: 31670, random-output-len: 1024, max-concurrency: [1, 4, 8, 16]}
+  - {random-input-len: 64438, random-output-len: 1024, max-concurrency: [1, 4, 8]}
+  - {random-input-len: 129974, random-output-len: 1024, max-concurrency: [1, 4]}

@@ -10,7 +10,7 @@ applyTo: '**/*.py'
 - Write clear and concise comments for each function.
 - Ensure functions have descriptive names and include type hints.
 - Provide docstrings following PEP 257 conventions with **Google style** (as enforced by `pydoclint`).
-- Use Python 3.12+ built-in generics for type annotations (e.g., `list[str]`, `dict[str, int]`, `str | None`). Import from `typing` only for special forms such as `Any`, `TypeAlias`, `Callable`, and `ClassVar`.
+- Use Python 3.10+ built-in generics for type annotations (e.g., `list[str]`, `dict[str, int]`, `str | None`). Import from `typing` only for special forms such as `Any`, `TypeAlias`, `Callable`, and `ClassVar`.
 - Break down complex functions into smaller, more manageable functions.
 
 ## General Instructions

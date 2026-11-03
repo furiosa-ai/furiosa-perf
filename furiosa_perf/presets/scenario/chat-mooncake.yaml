@@ -1,0 +1,53 @@
+# Service scenario replaying a production chatbot trace: Moonshot AI's Kimi
+# conversation workload from the Mooncake FAST'25 trace release (one hour of
+# requests, Apache-2.0). The trace holds only timestamps, token counts and prompt
+# block hashes, no text: AIPerf turns every hash id into a fixed 512-token block,
+# so requests that shared a prompt prefix in production share it again and hit the
+# server's prefix cache the same way.
+#
+# Requests are sent at their recorded times (open loop: a slow reply does not delay
+# the next request), stretched to a fraction of the recorded speed. A bisection
+# finds the highest speed, in percent, whose point meets the SLO.
+#
+# Points start at minute 30, not at the trace's beginning: there the cache is empty
+# and ten requests arrive at once, so prefixes are reused about a tenth as often as
+# in steady state (4 % against 46 %). The 30 s recorded before the start are sent
+# first, outside the measurement, to fill the prefix cache as that history would.
+kind: scenario
+task: chat-mooncake
+client: aiperf
+
+trace:
+  source: https://raw.githubusercontent.com/kvcache-ai/Mooncake/main/FAST25-release/traces/conversation_trace.jsonl
+  sha256: b8cbb061a85206d729d91cdc2981f43c9e0d99209dce588d3af5f7934408b9df
+  license: Apache-2.0 (kvcache-ai/Mooncake, FAST'25 trace release)
+  replay: recorded timestamps, stretched by 100 / speed
+
+# A fresh server for every point: the trace's prefix structure repeats in every
+# slice, so a reused server would start each point with the previous point's cache.
+restart-server: per-point
+
+server:
+  enable-prefix-caching: true  # the trace's shared prefixes are the point of replaying it
+  max-model-len: 40960  # requests above this (about 5 % of the trace) are left out and counted
+  default-chat-template-kwargs: {enable_thinking: false}
+
+slo:
+  ttft_p95_ms: 3000
+  tpot_p95_ms: 50
+
+args:
+  endpoint-type: chat
+  streaming: true
+  extra-inputs: {ignore_eos: true}  # replies have the trace's output length; synthetic blocks give the model no natural end
+  trace-duration: 600  # wall-clock seconds per point; slower points replay a shorter slice
+  trace-start: 1800  # recorded seconds from the trace's first request where every point's slice starts
+  trace-warmup: 30  # recorded seconds before the start replayed first to warm the cache (more than its KV fits)
+  benchmark-grace-period: 120
+  random-seed: 0
+
+search:
+  key: trace-speed-pct  # replay speed in percent of the recorded speed
+  min: 5
+  max: 100
+  step: 5
