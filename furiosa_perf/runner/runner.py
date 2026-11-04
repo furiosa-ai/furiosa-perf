@@ -170,8 +170,8 @@ class APIServerManager:
                         # Convert "0,1,2,3" → "npu:0,npu:1,npu:2,npu:3"
                         value = ",".join(f"npu:{idx}" for idx in value.split(","))
                     if cli_key == "tensor-parallel-size":
-                        # furiosa-llm counts PEs (8 per NPU); vLLM counts NPUs.
-                        value = value * 8
+                        # Newer furiosa-llm removed --tensor-parallel-size; TP follows --devices.
+                        continue
                     command.extend([f"--{cli_key}", str(value)])
                 else:
                     logger.warning(f"Unsupported config type for {key}: {type(value)}")
