@@ -39,6 +39,7 @@ def test_furiosa_layout_reads_replicas_and_stages_from_the_log() -> None:
     assert furiosa_layout(TWO_REPLICAS) == [[{0}], [{1}]]
     assert furiosa_layout(ONE_PIPELINE) == [[{0}, {1}]]
     assert furiosa_layout("DP entry DpId(0) \u2192 PP devices [TpGroupId(npu2-3)]") == [[{2, 3}]]
+    assert furiosa_layout("DP entry DpId(0) \u2192 PP devices [TpGroupId(npu0pe0-3)]") == [[{0}]]
 
 
 def test_check_furiosa_layout_rejects_a_silently_dropped_card() -> None:

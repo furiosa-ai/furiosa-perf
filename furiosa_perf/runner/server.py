@@ -104,7 +104,8 @@ def furiosa_layout(log_text: str) -> list[list[set[int]]]:
     for stages in FURIOSA_REPLICA_LINE.findall(log_text):
         placed = []
         for group in FURIOSA_STAGE.findall(stages):
-            bounds = [int(n) for n in re.findall(r"\d+", group)]
+            # npu2-3 is cards 2..3; npu0pe0-3 is PEs 0..3 of card 0 (a sub-card artifact), so drop the PE part.
+            bounds = [int(n) for n in re.findall(r"\d+", re.sub(r"pe[\d-]+", "", group))]
             placed.append(set(range(bounds[0], bounds[-1] + 1)) if bounds else set())
         replicas.append(placed)
     return replicas
