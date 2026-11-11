@@ -26,9 +26,10 @@ PAGES.summary = async function (st) {
   const gpu = gpuOpts.indexOf(st.gpu) >= 0 ? st.gpu : 'hw:' + (gpuHws.filter((h) => family(h) === 'rtx')[0] || gpuHws[0]);
   const gpuHw = gpu && gpu.indexOf('hw:') === 0 ? gpu.slice(3) : null;
   const gpuLabel = !gpu ? '—' : gpuHw ? gpuHw + ' · newest version per model' : platformLabel(gpu);
-  // Devices: each side's best device count per model, or the same count on both sides.
+  // Devices, one count per model and side whatever the metric: RNGD's count on both sides (default), each
+  // side's best by TPS per kW at the SLO, or one count on both sides.
   const counts = [...new Set(tRuns.map((r) => r.n))].sort((a, b) => a - b);
-  const dev = counts.indexOf(+st.dev) >= 0 ? +st.dev : 'best';
+  const dev = counts.indexOf(+st.dev) >= 0 ? +st.dev : st.dev === 'best' ? 'best' : 'match';
   // How many models to show (best ratio first), so a meeting can stop at the strong ones.
   const featured = featuredFor((plats[rngd] || {}).ver);
   const show = showOf(st, featured);
@@ -40,7 +41,7 @@ PAGES.summary = async function (st) {
   const controls = ''
     + sideGroup('Compare', select('RNGD', 'rngd', rngd, rngdKeys.map(opt))
     + select('Compare with', 'gpu', gpu, gpuOpts.map((k) => (k.indexOf('hw:') === 0 ? { v: k, label: k.slice(3) + ' · newest per model' } : opt(k))))
-    + select('Devices', 'dev', String(dev), [{ v: 'best', label: 'Best per side' }].concat(counts.map((n) => ({ v: String(n), label: '×' + n + ' both sides' })))))
+    + select('Devices', 'dev', String(dev), [{ v: 'match', label: 'Same as RNGD' }, { v: 'best', label: 'Best per side · TPS/kW' }].concat(counts.map((n) => ({ v: String(n), label: '×' + n + ' both sides' })))))
     + sideGroup('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] })))
       + select('ISL / OSL', 'scen', scen, scens) + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '')
       + (M.kw ? serverKwInputs(['rngd', family(gpuHw || (plats[gpu] || {}).hw || '')]) : ''))
@@ -53,16 +54,34 @@ PAGES.summary = async function (st) {
   const newestVer = {};  // per model, the newest version measured on the compared GPU
   tRuns.filter(onGpu).forEach((r) => { if (!newestVer[r.model] || cmpVer(r.ver, newestVer[r.model]) > 0) newestVer[r.model] = r.ver; });
   const hwNewest = Object.values(newestVer).reduce((a, v) => (!a || cmpVer(v, a) > 0 ? v : a), null);
-  const sel = tRuns.filter((r) => (platformKey(r) === rngd || (onGpu(r) && r.ver === newestVer[r.model])) && (dev === 'best' || r.n === dev));
+  const sel = tRuns.filter((r) => (platformKey(r) === rngd || (onGpu(r) && r.ver === newestVer[r.model])) && (typeof dev !== 'number' || r.n === dev));
   await loadPoints(sel);
   const [isl, osl] = scen.split('/').map(Number);
-  // Best device count per model and side.
+  const sideOf = (r) => (platformKey(r) === rngd ? 'r' : 'g');
+  // The device count of each model and side, chosen once so that every metric compares the same runs.
+  const ns = {};
+  sel.forEach((r) => { const s = (ns[r.model] = ns[r.model] || { r: [], g: [] }); if (s[sideOf(r)].indexOf(r.n) < 0) s[sideOf(r)].push(r.n); });
+  const pickN = {};
+  Object.keys(ns).forEach((m) => {
+    const rs = ns[m].r.slice().sort((a, b) => b - a), gs = ns[m].g;
+    if (dev === 'match') {
+      // RNGD: its largest count the GPU also measured; GPU: that count, else the nearest one measured (marked).
+      const rn = rs.filter((n) => gs.indexOf(n) >= 0)[0] || rs[0];
+      const gn = gs.slice().sort((a, b) => Math.abs(Math.log(a / rn)) - Math.abs(Math.log(b / rn)) || b - a)[0];
+      pickN[m] = { r: rn, g: gn };
+    } else if (dev === 'best') {
+      const by = (side) => sel.filter((r) => r.model === m && sideOf(r) === side)
+        .map((r) => ({ n: r.n, v: (METRICS.tpkw.f(pointsAt(r, isl, osl), r, slo) || { v: -1 }).v }))
+        .sort((a, b) => b.v - a.v || a.n - b.n)[0];
+      pickN[m] = { r: (by('r') || {}).n, g: (by('g') || {}).n };
+    } else pickN[m] = { r: dev, g: dev };
+  });
   const best = {};
   sel.forEach((r) => {
+    const side = sideOf(r);
+    if (!pickN[r.model] || r.n !== pickN[r.model][side]) return;
     const m = M.f(pointsAt(r, isl, osl), r, slo, rackKw);
-    if (!m) return;
-    const slot = (best[r.model] = best[r.model] || {}), side = platformKey(r) === rngd ? 'r' : 'g', cur = slot[side];
-    if (!cur || (M.higher ? m.v > cur.v : m.v < cur.v)) slot[side] = { v: m.v, n: r.n, ge: !!m.ge, run: r };
+    if (m) (best[r.model] = best[r.model] || {})[side] = { v: m.v, n: r.n, ge: !!m.ge, run: r };
   });
   // ratio > 1 always means RNGD is better, whichever direction the metric improves in.
   // Only models both sides measured: a model without the compared GPU has nothing to compare.
@@ -84,7 +103,8 @@ PAGES.summary = async function (st) {
 
   const label = (x) => (x ? (x.ge ? '≥' : '') + fmt(x.v) + '  ×' + x.n : '—');
   // No one value (M.point): pick a model from the tiles (the first by default); it is drawn at every batch.
-  const sub = (x) => 'RNGD ×' + x.r.n + ' · ' + x.g.run.hw + ' ×' + x.g.n + (gpuHw ? ' · ' + backendLabel(x.g.run.backend) + ' ' + x.g.run.ver : '');
+  const sub = (x) => 'RNGD ×' + x.r.n + ' · ' + x.g.run.hw + ' ×' + x.g.n + (dev === 'match' && x.g.n !== x.r.n ? ' (×' + x.r.n + ' not measured)' : '')
+    + (gpuHw ? ' · ' + backendLabel(x.g.run.backend) + ' ' + x.g.run.ver : '');
   const items = list.map((x) => ({ key: x.model, name: x.model, sub: sub(x) + (x.ratio === null ? '' : ' · ' + multText(x.ratio, M.higher)) })), pick = M.point && list.length ? pickedKey(st, 'pick', items, items[0].key) : null;
   const x0 = list.filter((x) => x.model === pick)[0];
   const byBatch = !x0 ? '' : pickTiles('pick', items, pick) + '<div class="picked"><h3>' + esc(x0.model) + ' <span class="faint mono">' + esc(sub(x0)) + '</span></h3>'
@@ -99,8 +119,9 @@ PAGES.summary = async function (st) {
       const top = rp <= gp ? 6 : 30;  // on the shorter side's row, just past the longer bar
       ratio = '<div class="ratio" style="top:' + top + 'px;left:calc(' + Math.max(rp, gp) + '% + 8px);color:' + (x.ratio >= 1 ? 'var(--accent)' : 'var(--title)') + '">' + bound + multText(x.ratio, M.higher) + '</div>';
     }
+    const nearest = x.g.n !== x.r.n && dev === 'match' ? ' <span class="faint mono" title="the GPU was not measured at RNGD\'s device count">· GPU ×' + x.r.n + ' not measured</span>' : '';
     const older = gpuHw && x.g.run.ver !== hwNewest ? ' <span class="faint mono" title="not measured on the newest version">· ' + esc(backendLabel(x.g.run.backend) + ' ' + x.g.run.ver) + '</span>' : '';
-    return '<div class="bar-row"><div class="name">' + esc(x.model) + older + '</div><div class="bar-track">'
+    return '<div class="bar-row"><div class="name">' + esc(x.model) + older + nearest + '</div><div class="bar-track">'
       + '<div class="bar r" style="width:' + rp + '%"></div><div class="bar g" style="width:' + gp + '%"></div>' + ratio
       + '</div><div class="bar-vals"><span>' + label(x.r) + '</span><span class="muted">' + label(x.g) + '</span></div></div>';
   }).join('');
@@ -108,7 +129,8 @@ PAGES.summary = async function (st) {
   // Panel heading: what is measured in plain words, then one line of how (conditions, power basis, devices).
   const gHw = gpuHw || (plats[gpu] || {}).hw || '';
   const servers = M.kw ? ' 8-card server power: RNGD ' + serverKw('RNGD') + ' kW' + (SERVER_KW[family(gHw)] ? ', ' + FAMILY_NAME[family(gHw)] + ' ' + serverKw(gHw) + ' kW' : '') + '.' : '';
-  const devices = !M.bestN ? '' : dev === 'best' ? ' Each side at its best device count.' : ' ×' + dev + ' on both sides.';
+  const devices = dev === 'match' ? ' Both sides at RNGD\'s device count (the GPU at its nearest measured count where it lacks it, marked).'
+    : dev === 'best' ? ' Each side at its best device count by TPS per kW at the SLO, the same for every metric.' : ' ×' + dev + ' on both sides.';
   const bound = M.slo ? ' ≥: still above ' + slo + ' tok/s per user at the largest batch measured.' : '';
   const HEAD = metricText(metric, M, slo, rackKw);
   if (M.point) HEAD[1] += ' Ranked at ' + pointRead(metric) + '; pick a model to see every batch.';

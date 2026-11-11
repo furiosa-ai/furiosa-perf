@@ -1,5 +1,5 @@
-// Data: every run in the site, filterable, with its points as JSON, the filtered list as CSV, and per model
-// one CSV of every point of its filtered runs.
+// Data: every run in the site, filterable, with its points as JSON, the filtered list as CSV, and one CSV of
+// every point of the filtered runs per platform (device + serving framework version) and per model.
 'use strict';
 
 const RUN_COLUMNS = ['kind', 'task', 'model_id', 'hw', 'n', 'layout', 'backend', 'ver', 'date', 'num_points', 'failed', 'flags', 'variant', 'id'];
@@ -14,7 +14,7 @@ function csvOf(runs) {
   return [RUN_COLUMNS.join(',')].concat(runs.map((r) => RUN_COLUMNS.map((c) => csvCell(r[c])).join(','))).join('\n') + '\n';
 }
 
-// Every point of a model's runs, one row each: which run (POINT_RUN_COLUMNS), then every recorded value.
+// Every point of the given runs (one model's, or one platform's), one row each: which run (POINT_RUN_COLUMNS), then every recorded value.
 // Runs written by different versions record different columns: the union, left empty where a run has none.
 const POINT_RUN_COLUMNS = ['model_id', 'task', 'kind', 'hw', 'n', 'layout', 'backend', 'ver', 'date', 'variant', 'flags', 'id'];
 async function modelCsv(runs) {
@@ -40,10 +40,13 @@ PAGES.data = async function (st) {
     || cmpVer(b.ver, a.ver) || a.task.localeCompare(b.task) || a.model.localeCompare(b.model));
   const points = rows.reduce((s, r) => s + r.num_points, 0), failed = rows.reduce((s, r) => s + r.failed, 0);
   const any = (label) => [{ v: '', label: label }];
+  const tile = (attr, key, name, rs) => '<button class="tile" ' + attr + '="' + esc(key) + '"><span class="name">' + esc(name) + '</span><span class="sub">'
+    + rs.length + ' runs · ' + rs.reduce((s, r) => s + r.num_points, 0).toLocaleString('en-US') + ' points · CSV</span></button>';
+  // Newest version first within each device.
+  const plats = [...new Set(rows.map(platformKey))].map((k) => rows.filter((r) => platformKey(r) === k)[0])
+    .sort((a, b) => famOrder(a.hw) - famOrder(b.hw) || a.hw.localeCompare(b.hw) || cmpVer(b.ver, a.ver)).map(platformKey).map((k) => tile('data-platform-csv', k, platformLabel(k), rows.filter((r) => platformKey(r) === k))).join('');
   const models = [...new Set(rows.map((r) => r.model))].sort((a, b) => a.localeCompare(b)).map((m) => {
-    const mr = rows.filter((r) => r.model === m);
-    return '<button class="tile" data-model-csv="' + esc(m) + '"><span class="name">' + esc(m) + '</span><span class="sub">'
-      + mr.length + ' runs · ' + mr.reduce((s, r) => s + r.num_points, 0).toLocaleString('en-US') + ' points · CSV</span></button>';
+    return tile('data-model-csv', m, m, rows.filter((r) => r.model === m));
   }).join('');
   const table = rows.map((r) => '<tr><td>' + esc(r.kind) + '</td><td>' + esc(r.task) + '</td><td>' + esc(r.model_id) + '</td>'
     + '<td>' + esc(r.hw + ' ×' + r.n + (r.layout ? ' ' + r.layout : '')) + '</td><td>' + esc(backendLabel(r.backend) + ' ' + r.ver) + '</td>'
@@ -59,6 +62,8 @@ PAGES.data = async function (st) {
     + '<button class="button" id="csv">Download CSV</button></div></div>'
     + '<section class="kpis">' + kpi('Runs', rows.length.toLocaleString('en-US')) + kpi('Points', points.toLocaleString('en-US'))
     + kpi('Models', new Set(rows.map((r) => r.model)).size) + kpi('Failed points', failed.toLocaleString('en-US'), 'var(--fail)') + '</section>'
+    + (plats ? '<section class="panel"><div class="panel-head"><h2>Download by platform</h2><span class="muted">One CSV per device and serving framework version: every point of its runs shown below (all models and device counts), the run it came from first</span></div>'
+      + '<div class="tiles">' + plats + '</div></section>' : '')
     + (models ? '<section class="panel"><div class="panel-head"><h2>Download by model</h2><span class="muted">One CSV per model: every point of its runs shown below, the run it came from first</span></div>'
       + '<div class="tiles">' + models + '</div></section>' : '')
     + '<section class="panel"><div class="scroll"><table class="list" style="min-width:1000px"><thead><tr><th>Kind</th><th>Task</th><th>Model</th><th>Hardware</th><th>Backend</th>'
@@ -69,10 +74,14 @@ PAGES.data = async function (st) {
 
 // The CSVs are built from the filters in the URL when a button is clicked.
 document.addEventListener('click', async (e) => {
-  const tile = e.target.closest('[data-model-csv]');
+  const tile = e.target.closest('[data-model-csv]'), plat = e.target.closest('[data-platform-csv]');
   if (e.target.id === 'csv') save(csvOf(filteredRuns(await loadIndex(), STATE)), 'furiosa-perf-runs.csv');
   if (tile) {
     const m = tile.dataset.modelCsv, runs = filteredRuns(await loadIndex(), STATE).filter((r) => r.model === m);
     save(await modelCsv(runs), 'furiosa-perf_' + m.replace(/[^\w.-]+/g, '-') + '.csv');
+  }
+  if (plat) {
+    const k = plat.dataset.platformCsv, runs = filteredRuns(await loadIndex(), STATE).filter((r) => platformKey(r) === k);
+    save(await modelCsv(runs), 'furiosa-perf_' + k.replace(/[^\w.-]+/g, '_') + '.csv');
   }
 });
