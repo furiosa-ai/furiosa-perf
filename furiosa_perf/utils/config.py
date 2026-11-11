@@ -27,8 +27,9 @@ class APIServerConfig:
 class VllmServerConfig(APIServerConfig):
     """vLLM-specific API server configuration.
 
-    Infers ``tensor_parallel_size`` from ``devices`` when omitted, and vice
-    versa. Raises ``ValueError`` if both are provided but inconsistent.
+    Infers ``tensor_parallel_size`` from ``devices`` and ``data_parallel_size``
+    when omitted, and vice versa. Raises ``ValueError`` if the device count is
+    not ``tensor_parallel_size * data_parallel_size``.
     """
 
     def __post_init__(self) -> None:
@@ -37,23 +38,26 @@ class VllmServerConfig(APIServerConfig):
             self.devices = str(self.devices)
         if self.tensor_parallel_size is None:
             if self.devices is not None:
-                self.tensor_parallel_size = len(self.devices.split(","))
+                self.tensor_parallel_size = len(self.devices.split(",")) // self.data_parallel_size
             else:
                 self.tensor_parallel_size = 1
-                self.devices = ",".join(map(str, range(self.tensor_parallel_size)))
-        elif self.devices is None:
-            self.devices = ",".join(map(str, range(self.tensor_parallel_size)))
+        if self.devices is None:
+            num_devices = self.tensor_parallel_size * self.data_parallel_size
+            self.devices = ",".join(map(str, range(num_devices)))
 
         if not self._check_compatibility():
             raise ValueError(
                 f"devices={self.devices!r} is not compatible with "
-                f"tensor_parallel_size={self.tensor_parallel_size}"
+                f"tensor_parallel_size={self.tensor_parallel_size} x "
+                f"data_parallel_size={self.data_parallel_size}"
             )
 
     def _check_compatibility(self) -> bool:
-        """Return True when device count matches tensor_parallel_size."""
+        """Return True when device count matches tensor_parallel_size * data_parallel_size."""
+        if not self.tensor_parallel_size:
+            return False
         used = len(self.devices.split(",")) if self.devices is not None else 1
-        return used == self.tensor_parallel_size
+        return used == self.tensor_parallel_size * self.data_parallel_size
 
 
 @dataclass
@@ -63,22 +67,25 @@ class FuriosaLLMServerConfig(APIServerConfig):
     fxb: str | None = None
 
     def __post_init__(self) -> None:
-        """Infer tensor_parallel_size from devices when omitted."""
+        """Infer tensor_parallel_size from devices and data_parallel_size when omitted."""
         if self.devices is not None:
             self.devices = str(self.devices)
         if self.tensor_parallel_size is None and self.devices is not None:
-            self.tensor_parallel_size = len(self.devices.split(","))
+            self.tensor_parallel_size = len(self.devices.split(",")) // self.data_parallel_size
 
         if not self._check_compatibility():
             raise ValueError(
                 f"devices={self.devices!r} is not compatible with "
-                f"tensor_parallel_size={self.tensor_parallel_size}"
+                f"tensor_parallel_size={self.tensor_parallel_size} x "
+                f"data_parallel_size={self.data_parallel_size}"
             )
 
     def _check_compatibility(self) -> bool:
-        """Return True when device count matches tensor_parallel_size."""
+        """Return True when device count matches tensor_parallel_size * data_parallel_size."""
+        if not self.tensor_parallel_size:
+            return False
         used = len(self.devices.split(",")) if self.devices is not None else 1
-        return used == self.tensor_parallel_size
+        return used == self.tensor_parallel_size * self.data_parallel_size
 
 
 class APIServerConfigLoader:
