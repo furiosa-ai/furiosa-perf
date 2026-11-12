@@ -113,21 +113,21 @@ PAGES.releases = async function (st) {
   const HEAD = metricText(metric, M, slo, rackKw);
   const cond = GEN_TASKS[task] + ', ' + scen + ' ISL/OSL. ' + (dev === 'all' ? 'Every RNGD device count.' : 'RNGD ×' + dev + '.')
     + (M.kw ? ' 8-card server power: RNGD ' + serverKw('RNGD') + ' kW.' : '') + (M.slo ? ' ≥ = lower bound.' : '');
-  const how = HEAD[1] + (M.point ? ' Pick a model to see every batch, one bar per release.'
+  const how = HEAD[1] + (M.point ? ' Pick a model to see every batch, one bar per release; the multiple above each batch is the latest release over the first that measured the model.'
     : ' Each cell is the value on that release; the small figure is the multiple over the previous release that measured the model (' + (M.higher ? 'higher' : 'lower')
       + ' is better). Total = first measured → latest. The header marks server flags a release turned on (e.g. +overlap = --enable-overlap-scheduling).')
     + (M.slo ? ' ≥: still above ' + slo + ' tok/s per user at the largest batch measured.' : '');
   const head = (extra) => '<div class="panel-head"><div><h2>' + esc(HEAD[0] + ' by furiosa-llm release') + '</h2><div class="panel-sub">' + note('releases', cond, how) + '</div></div>' + (extra || '') + '</div>';
   if (M.point) {
     // No one value per release: pick a model from the tiles (the first by default); it is drawn at every batch,
-    // one bar per release (oldest first, the newest in the brand red), the newest over the one before above each batch.
+    // one bar per release (oldest first, the newest in the brand red), the newest over the oldest above each batch (as Total).
     const sorted = rows;  // best total first, like the table
     const relsOf = (r) => vers.filter((v) => runsOf[r.key][v]), sub = (r) => 'RNGD ×' + r.n + ' · ' + relsOf(r).map(short).join(', ');
     const items = sorted.map((r) => ({ key: r.key, name: r.model, sub: sub(r) })), pick = sorted.length ? pickedKey(st, 'pick', items, items[0].key) : null;
     const r0 = sorted.filter((r) => r.key === pick)[0], rv = r0 ? relsOf(r0) : [];
     const series = rv.map((v, j) => ({ name: short(v), color: 'var(--c-red-' + Math.min(3, rv.length - 1 - j) + ')', run: runsOf[r0.key][v] }));
     const list = !r0 ? '' : pickTiles('pick', items, pick) + '<div class="picked"><h3>' + esc(r0.model) + ' <span class="faint mono">' + esc(sub(r0)) + '</span></h3>'
-      + batchChart(M, series, [series.length - 1, series.length - 2], isl, osl) + '</div>';
+      + batchChart(M, series, [series.length - 1, 0], isl, osl) + '</div>';
     return page('<section class="panel">' + head()
       + (list || '<div class="empty">No RNGD model was measured on two or more releases for this selection.</div>') + more + '</section>');
   }
