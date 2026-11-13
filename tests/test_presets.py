@@ -44,6 +44,17 @@ def test_expand_matrix_scales_the_prompt_count_by_the_batch_size() -> None:
     assert [(p["random-batch-size"], p["num-prompts"]) for p in points] == [(1, 24), (50, 1200)]
 
 
+def test_expand_matrix_takes_prompts_per_concurrency_and_a_request_rate_of_the_concurrency() -> None:
+    """15 prompts per concurrency makes a 15 s point when each user sends one request a second."""
+    points = expand_matrix(
+        {"prompts-per-concurrency": 15},
+        [{"random-input-len": 512, "max-concurrency": [1, 16], "request-rate": "max-concurrency"}],
+    )
+
+    assert [(p["max-concurrency"], p["request-rate"], p["num-prompts"]) for p in points] == [(1, 1, 15), (16, 16, 240)]
+    assert "prompts-per-concurrency" not in points[0]
+
+
 def test_expand_matrix_keeps_an_explicit_prompt_count_and_runs_args_alone_without_a_matrix() -> None:
     """num-prompts given anywhere wins over the default; no matrix means one point from args."""
     assert expand_matrix({}, [{"max-concurrency": 4, "num-prompts": 100}])[0]["num-prompts"] == 100

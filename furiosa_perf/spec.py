@@ -402,7 +402,10 @@ def expand_matrix(args: dict[str, Any], matrix: list[dict[str, Any]]) -> list[di
 
     Each point is ``args`` overlaid with one combination of a row. ``num-prompts``
     defaults to :data:`PROMPTS_PER_CONCURRENCY` times ``max-concurrency``, times
-    ``random-batch-size`` where the client packs prompts into one request.
+    ``random-batch-size`` where the client packs prompts into one request; a row or ``args``
+    may set ``prompts-per-concurrency`` instead of 3 (not passed to the client). A
+    ``request-rate`` of ``max-concurrency`` becomes that point's concurrency (one request
+    per user per second).
 
     Args:
         args: Client options shared by every point.
@@ -418,11 +421,14 @@ def expand_matrix(args: dict[str, Any], matrix: list[dict[str, Any]]) -> list[di
         values = [v if isinstance(v, list) else [v] for v in row.values()]
         for combination in itertools.product(*values):
             point = {**args, **dict(zip(keys, combination, strict=True))}
+            per_concurrency = point.pop("prompts-per-concurrency", PROMPTS_PER_CONCURRENCY)
+            if point.get("request-rate") == "max-concurrency":  # each user sends one request a second
+                point["request-rate"] = point["max-concurrency"]
             if "num-prompts" not in point and isinstance(point.get("max-concurrency"), int):
                 # vllm bench packs random-batch-size prompts into one request (embedding inputs, a
                 # reranker's documents), so the prompt count scales with it to keep the request count.
                 batch = int(point.get("random-batch-size") or 1)
-                point["num-prompts"] = PROMPTS_PER_CONCURRENCY * point["max-concurrency"] * batch
+                point["num-prompts"] = per_concurrency * point["max-concurrency"] * batch
             points.append(point)
     return points
 
