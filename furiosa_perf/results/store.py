@@ -40,8 +40,8 @@ SCENARIO_LOAD_PREFIXES = {
 def point_name(point: dict[str, Any]) -> str:
     """Directory name of a point.
 
-    Fixed-length points: ``i1024-o128-c16``, ``i512-b5-c16`` (rerank) or ``i512-c16``
-    (embedding). Scenario points are named by their load: ``u32`` for 32 users,
+    Fixed-length points: ``i1024-o128-c16``, ``i512-b5-c16`` (rerank), ``i512-c16``
+    (embedding) or ``i768-o1024-c16-img512x512`` (an image per request). Scenario points are named by their load: ``u32`` for 32 users,
     ``ucr2.0-n64`` for a user-centric rate, ``r4.0`` for a request rate.
 
     Args:
@@ -59,7 +59,21 @@ def point_name(point: dict[str, Any]) -> str:
     elif "random-batch-size" in point:
         parts.append(f"b{point['random-batch-size']}")
     parts.append(f"c{point.get('max-concurrency')}")
+    if image := image_size(point):
+        parts.append(f"img{image}")
     return "-".join(parts)
+
+
+def image_size(point: dict[str, Any]) -> str | None:
+    """``"512x512"`` of a multimodal point's image bucket (``random-mm-bucket-config``), else ``None``.
+
+    The bucket config is vllm bench's ``{(width, height, frames): share, ...}``; the sizes are joined
+    with ``+`` when a point mixes several.
+    """
+    config = point.get("random-mm-bucket-config")
+    if not config:
+        return None
+    return "+".join(f"{w}x{h}" for w, h in re.findall(r"\(\s*(\d+)\s*,\s*(\d+)\s*,", str(config))) or None
 
 
 def check_unique_point_names(points: list[dict[str, Any]]) -> None:

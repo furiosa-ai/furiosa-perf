@@ -8,6 +8,7 @@ from furiosa_perf.results.store import (
     RECORD_FILE,
     RUN_FILE,
     check_unique_point_names,
+    image_size,
     point_name,
     prepare_run_dir,
     read_json,
@@ -22,6 +23,7 @@ from furiosa_perf.results.store import (
         ({"random-input-len": 1024, "random-output-len": 128, "max-concurrency": 8}, "i1024-o128-c8"),
         ({"random-input-len": 512, "random-batch-size": 5, "max-concurrency": 4}, "i512-b5-c4"),
         ({"random-input-len": 256, "max-concurrency": 1}, "i256-c1"),
+        ({"random-input-len": 768, "random-output-len": 1024, "max-concurrency": 16, "random-mm-bucket-config": "{(512, 512, 1): 1.0}"}, "i768-o1024-c16-img512x512"),
         ({"concurrency": 32, "isl": 150}, "u32"),
         ({"user-centric-rate": 2.0, "num-users": 64}, "ucr2.0-n64"),
     ],
@@ -29,6 +31,12 @@ from furiosa_perf.results.store import (
 def test_point_name_says_what_each_number_is(point: dict[str, object], expected: str) -> None:
     """Baseline points are named by input, output or documents and concurrency; scenario points by their load."""
     assert point_name(point) == expected
+
+
+def test_image_size_reads_every_bucket_of_a_multimodal_point() -> None:
+    """A text point has no image; a mixed bucket config lists each size."""
+    assert image_size({"random-input-len": 1024}) is None
+    assert image_size({"random-mm-bucket-config": "{(512, 512, 1): 0.5, (1920, 1080, 1): 0.5}"}) == "512x512+1920x1080"
 
 
 def test_points_that_would_share_a_directory_are_rejected() -> None:

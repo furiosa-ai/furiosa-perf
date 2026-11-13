@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from furiosa_perf.clients.base import BenchmarkClient
+from furiosa_perf.results.store import image_size
 from furiosa_perf.runner.server import option_args
 
 VLLM_BENCH_VERSION = "0.30.0"
@@ -85,6 +86,7 @@ def summary_row(point: dict[str, Any], result: dict[str, Any] | None, fail_reaso
         "Output Tokens": point.get("random-output-len") or 0,
         "Concurrent": point.get("max-concurrency"),
         "Inputs per Request": point.get("random-batch-size") or 1,  # embedding inputs or a reranker's documents
+        "Image": image_size(point),  # image-text points: the image sent with every prompt, e.g. 512x512
         "ok": not fail_reason,
         "fail_reason": fail_reason,
         "completed": result.get("completed"),

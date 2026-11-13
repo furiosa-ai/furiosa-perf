@@ -1,6 +1,7 @@
-# Fixed-length baseline for vision-language generation as it is used: one large image per request
-# and a short text prompt, with an answer to write. Two pairs: a brief Q&A (system prompt + question
-# -> caption or short answer) and a detailed description (instructions -> long description).
+# Fixed-length baseline for vision-language generation as it is used: one image per request, a text
+# prompt, and an answer to write. Two image sizes, a 512x512 (a document page, a screenshot) and a
+# 1024x1024 (a photo); the text is sized so that text + image tokens land on a text-preset point
+# (1024 or 2048 input tokens, 1024 out), so the same model's text run shows what the image costs.
 kind: baseline
 task: image-text
 client: vllm-bench
@@ -15,7 +16,6 @@ args:
   dataset-name: random-mm
   random-range-ratio: 0
   random-mm-base-items-per-request: 1
-  random-mm-bucket-config: "{(1024, 1024, 1): 1.0}"
   random-mm-limit-mm-per-prompt: '{"image": 1}'
   ignore-eos: true
   temperature: 0
@@ -23,11 +23,13 @@ args:
   percentile-metrics: ttft,tpot,itl,e2el
   metric-percentiles: 25,50,75,90,95,99
 
-# random-input-len is the text alone. The image's tokens come on top and differ per model (a 1024x1024
-# image is ~1,024 tokens in Qwen3-VL, ~1,370 in EXAONE-4.5, 256 in gemma-4 at its default budget of
-# 280 soft tokens), so the result's total_input_tokens, from the server's usage, is the real prompt length.
+# random-input-len is the text alone; the image's tokens come on top and differ per model. In Qwen3-VL
+# (32 px per token) a 512x512 image is ~256 tokens and a 1024x1024 ~1,024, so these rows prefill ~1,024
+# and ~2,048 tokens: compare with the text preset's 1024/1024 and 2048/1024. gemma-4 (256 tokens per
+# image at its default budget of 280) and EXAONE-4.5 (28 px per token) land near those; the result's
+# total_input_tokens, from the server's usage, is the real prompt length.
 # gemma-4's budget is a server option: run again with --server-arg 'mm-processor-kwargs={"image":{"max_soft_tokens":560}}'
 # (furiosa-llm; vLLM takes {"max_soft_tokens":560}) for a variant next to the default.
 matrix:
-  - {random-input-len: 256, random-output-len: 256, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256]}
-  - {random-input-len: 1024, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256]}
+  - {random-mm-bucket-config: "{(512, 512, 1): 1.0}", random-input-len: 768, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256]}
+  - {random-mm-bucket-config: "{(1024, 1024, 1): 1.0}", random-input-len: 1024, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256]}
