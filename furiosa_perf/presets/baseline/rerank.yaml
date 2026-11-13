@@ -1,5 +1,6 @@
-# Fixed-length baseline for reranker models: one query with a fixed number of random
-# documents of a fixed length per request, closed-loop concurrency sweep.
+# Fixed-length baseline for reranker models: one query with N random documents per request,
+# closed-loop concurrency sweep. Two axes: the length of a query+document pair and how many
+# documents a query ranks (a RAG retriever hands the reranker 10 to 100 candidates).
 kind: baseline
 task: rerank
 client: vllm-bench
@@ -11,15 +12,12 @@ args:
   backend: vllm-rerank
   endpoint: /v1/rerank
   dataset-name: random-rerank
-  random-batch-size: 5  # documents per query
   trust-remote-code: true
   percentile-metrics: e2el
   metric-percentiles: 25,50,75,90,95,99
 
+# random-input-len is the query + document pair the model scores (vllm bench splits it in half:
+# 512 = a 256-token query against 256-token documents); random-batch-size is documents per query.
+# Throughput to read: pairs/s (input sequences/s) and E2EL per query.
 matrix:
-  - {random-input-len: 256, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256, 512]}
-  - {random-input-len: 512, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256, 512]}
-  - {random-input-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64, 128]}
-  - {random-input-len: 2048, max-concurrency: [1, 4, 8, 16, 32, 64, 128]}
-  - {random-input-len: 4096, max-concurrency: [1, 4, 8, 16, 32, 64]}
-  - {random-input-len: 8192, max-concurrency: [1, 4, 8, 16, 32]}
+  - {random-input-len: [512, 1024, 2048], random-batch-size: [10, 50, 100], max-concurrency: [1, 4, 8, 16, 32, 64]}

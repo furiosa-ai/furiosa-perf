@@ -401,7 +401,8 @@ def expand_matrix(args: dict[str, Any], matrix: list[dict[str, Any]]) -> list[di
     """Expand matrix rows into points: list values form a cartesian product.
 
     Each point is ``args`` overlaid with one combination of a row. ``num-prompts``
-    defaults to :data:`PROMPTS_PER_CONCURRENCY` times ``max-concurrency``.
+    defaults to :data:`PROMPTS_PER_CONCURRENCY` times ``max-concurrency``, times
+    ``random-batch-size`` where the client packs prompts into one request.
 
     Args:
         args: Client options shared by every point.
@@ -418,7 +419,10 @@ def expand_matrix(args: dict[str, Any], matrix: list[dict[str, Any]]) -> list[di
         for combination in itertools.product(*values):
             point = {**args, **dict(zip(keys, combination, strict=True))}
             if "num-prompts" not in point and isinstance(point.get("max-concurrency"), int):
-                point["num-prompts"] = PROMPTS_PER_CONCURRENCY * point["max-concurrency"]
+                # vllm bench packs random-batch-size prompts into one request (embedding inputs, a
+                # reranker's documents), so the prompt count scales with it to keep the request count.
+                batch = int(point.get("random-batch-size") or 1)
+                point["num-prompts"] = PROMPTS_PER_CONCURRENCY * point["max-concurrency"] * batch
             points.append(point)
     return points
 

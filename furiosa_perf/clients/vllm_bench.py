@@ -84,6 +84,7 @@ def summary_row(point: dict[str, Any], result: dict[str, Any] | None, fail_reaso
         "Input Tokens": point.get("random-input-len"),
         "Output Tokens": point.get("random-output-len") or 0,
         "Concurrent": point.get("max-concurrency"),
+        "Inputs per Request": point.get("random-batch-size") or 1,  # embedding inputs or a reranker's documents
         "ok": not fail_reason,
         "fail_reason": fail_reason,
         "completed": result.get("completed"),
@@ -91,6 +92,9 @@ def summary_row(point: dict[str, Any], result: dict[str, Any] | None, fail_reaso
         "Output Throughput(tok/s)": number("output_throughput"),
         "Total Throughput(tok/s)": number("total_token_throughput"),
         "Request Throughput(req/s)": number("request_throughput", digits=3),
+        # Inputs scored per second: embedding inputs, a reranker's query-document pairs. The one throughput
+        # a rerank run always has: furiosa-llm's /v1/rerank reports no token usage, so its tok/s read 0.
+        "Sequence Throughput(seq/s)": number("input_sequence_throughput", digits=3),
     }
     for metric, (suffix, divisor, digits) in LATENCY_COLUMNS.items():
         for stat in LATENCY_STATS:

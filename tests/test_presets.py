@@ -37,6 +37,13 @@ def test_expand_matrix_takes_the_cartesian_product_of_list_values() -> None:
     assert all(p["dataset-name"] == "random" and p["random-output-len"] == 128 for p in points)
 
 
+def test_expand_matrix_scales_the_prompt_count_by_the_batch_size() -> None:
+    """vllm bench packs random-batch-size prompts into one request, so 3 requests per concurrency take 3 x batch prompts."""
+    points = expand_matrix({}, [{"random-input-len": 512, "random-batch-size": [1, 50], "max-concurrency": 8}])
+
+    assert [(p["random-batch-size"], p["num-prompts"]) for p in points] == [(1, 24), (50, 1200)]
+
+
 def test_expand_matrix_keeps_an_explicit_prompt_count_and_runs_args_alone_without_a_matrix() -> None:
     """num-prompts given anywhere wins over the default; no matrix means one point from args."""
     assert expand_matrix({}, [{"max-concurrency": 4, "num-prompts": 100}])[0]["num-prompts"] == 100
