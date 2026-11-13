@@ -1,6 +1,6 @@
 # Fixed-length baseline for vision-language generation as it is used: one image per request, a text
-# prompt, and an answer to write. Two image sizes, a 512x512 (a document page, a screenshot) and a
-# 1024x1024 (a photo); the text is sized so that text + image tokens land on a text-preset point
+# prompt, and an answer to write. Three image sizes, a 512x512 (a thumbnail), a 1024x1024 (a photo) and
+# a 2048x2048 (a scanned page, a full-size capture); the text is sized so that text + image tokens land on a text-preset point
 # (1024 or 2048 input tokens, 1024 out), so the same model's text run shows what the image costs.
 kind: baseline
 task: image-text
@@ -27,9 +27,12 @@ args:
 # (32 px per token) a 512x512 image is ~256 tokens and a 1024x1024 ~1,024, so these rows prefill ~1,024
 # and ~2,048 tokens: compare with the text preset's 1024/1024 and 2048/1024. gemma-4 (256 tokens per
 # image at its default budget of 280) and EXAONE-4.5 (28 px per token) land near those; the result's
-# total_input_tokens, from the server's usage, is the real prompt length.
+# total_input_tokens, from the server's usage, is the real prompt length. 2048² is the largest vision
+# bucket every RNGD VL build shares (Qwen 4,096 image tokens, EXAONE-4.5 its 1792² max): ~5,120 tokens,
+# compare with text 4096/1024.
 # gemma-4's budget is a server option: run again with --server-arg 'mm-processor-kwargs={"image":{"max_soft_tokens":560}}'
 # (furiosa-llm; vLLM takes {"max_soft_tokens":560}) for a variant next to the default.
 matrix:
   - {random-mm-bucket-config: "{(512, 512, 1): 1.0}", random-input-len: 768, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256]}
   - {random-mm-bucket-config: "{(1024, 1024, 1): 1.0}", random-input-len: 1024, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256]}
+  - {random-mm-bucket-config: "{(2048, 2048, 1): 1.0}", random-input-len: 1024, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256]}
