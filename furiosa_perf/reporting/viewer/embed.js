@@ -9,18 +9,18 @@ const EMBED_TASKS = { embedding: 'Embedding', rerank: 'Rerank' };
 // per second, see the preset), everything else closed loop.
 function batchLabel(task, b) {
   if (task === 'rerank') return b + ' documents / query';
-  return b === 1 ? '1 text / request · queries, rate = concurrency' : b + ' texts / request · indexing';
+  return b === 1 ? '1 text / request · queries, RPS = concurrency' : b + ' texts / request · indexing';
 }
 function tokensPerSec(p) { return p.total > 0 ? p.total : p.seq > 0 ? p.seq * p.isl : null; }  // rerank reports no usage: pairs × pair length
 const EMBED_Y = {
-  tok: { label: (t) => 'Input tokens / s', f: tokensPerSec, higher: true },
-  seq: { label: (t) => (t === 'rerank' ? 'Pairs / s' : 'Texts / s'), f: (p) => p.seq, higher: true },
-  reqps: { label: (t) => 'Requests / s', f: (p) => p.reqps, higher: true },
+  tok: { label: (t) => 'Total TPS', f: tokensPerSec, higher: true },
+  seq: { label: (t) => 'Pairs / s', f: (p) => p.seq, higher: true, only: 'rerank' },  // documents scored per second
+  reqps: { label: (t) => 'RPS', f: (p) => p.reqps, higher: true },
   e2el50: { label: (t) => 'E2EL p50 (s)', f: (p) => p.e2el50, higher: false },
   e2el99: { label: (t) => 'E2EL p99 (s)', f: (p) => p.e2el99, higher: false },
   duration: { label: (t) => 'Run duration (s)', f: (p) => p.duration, higher: false },
 };
-const EMBED_X = { len: 'Input length (tokens)', conc: 'Concurrency' };
+const EMBED_X = { conc: 'Concurrency' };
 const EW = 900, EH = 460, EL = 70, ER = 880, ET = 20, EB = 410;
 
 // Runs of the embedding and rerank presets as configured, newest of each measurement.
@@ -32,14 +32,13 @@ function fmtLen(v) { return v >= 1024 && v % 1024 === 0 ? v / 1024 + 'K' : Strin
 
 // What each axis measures, in plain words, for the note under the chart.
 const EMBED_X_TEXT = {
-  len: 'tokens in each text (embedding) or in each query + document pair (rerank); the presets step through every length bucket the model supports.',
-  conc: 'requests in flight at once; for the query rows it is also the requests sent per second.',
+  conc: 'requests in flight at once; for the query rows it is also the RPS sent (one request per user per second).',
 };
 function embedYText(key, task) {
   const unit = task === 'rerank' ? 'query + document pair' : 'text';
   return {
-    tok: 'input tokens the server ' + (task === 'rerank' ? 'scored' : 'embedded') + ' per second, the indexing speed' + (task === 'rerank' ? ' (the server reports no token usage for /v1/rerank, so this is pairs/s × pair length)' : '') + '.',
-    seq: (task === 'rerank' ? 'query-document pairs scored' : 'texts embedded') + ' per second.',
+    tok: 'input tokens the server ' + (task === 'rerank' ? 'scored' : 'embedded') + ' per second (there are no output tokens)' + (task === 'rerank' ? '; the server reports no token usage for /v1/rerank, so this is pairs/s × pair length' : '') + '.',
+    seq: 'query-document pairs scored per second.',
     reqps: 'requests completed per second; a request is one ' + (task === 'rerank' ? 'query with its documents' : 'text, or a batch of texts for indexing') + '.',
     e2el50: 'median time from sending a request to its full response; for the query rows it includes any wait in the server.',
     e2el99: '99th-percentile time from sending a request to its full response; for the query rows it includes any wait in the server.',
@@ -61,11 +60,11 @@ async function renderEmbed(st, task, asideTop) {
   const sel = (r) => ptsOf(r).filter((p) => p.batch === batch);
   const lens = [...new Set(mRuns.flatMap((r) => sel(r).map((p) => p.isl)))].sort((a, b) => a - b);
   const concs = [...new Set(mRuns.flatMap((r) => sel(r).map((p) => p.conc)))].sort((a, b) => a - b);
-  const xKey = EMBED_X[st.x] ? st.x : 'len';
+  const xKey = 'conc';
   // The other dimension is held at one value: a concurrency when sweeping length, a length when sweeping concurrency.
-  const conc = concs.indexOf(+st.conc) >= 0 ? +st.conc : concs[0];
   const len = lens.indexOf(+st.len) >= 0 ? +st.len : lens.indexOf(512) >= 0 ? 512 : lens[0];
-  const yKey = EMBED_Y[st.y] ? st.y : (task === 'rerank' ? 'seq' : 'tok');
+  const yKeys = Object.keys(EMBED_Y).filter((k) => !EMBED_Y[k].only || EMBED_Y[k].only === task);
+  const yKey = yKeys.indexOf(st.y) >= 0 ? st.y : (task === 'rerank' ? 'seq' : 'tok');
   const Y = EMBED_Y[yKey];
   const slo = st.eslo > 0 ? +st.eslo : 0;  // E2EL limit in s, drawn when a latency is on Y
 
@@ -85,8 +84,8 @@ async function renderEmbed(st, task, asideTop) {
   const visible = all.filter((o) => o.on);
 
   // The curve of each series: Y against length at the chosen concurrency, or against concurrency at the chosen length.
-  const xs = xKey === 'len' ? lens : concs;
-  const at = (o, x) => sel(o.r).filter((p) => (xKey === 'len' ? p.isl === x && p.conc === conc : p.conc === x && p.isl === len))[0];
+  const xs = concs;
+  const at = (o, x) => sel(o.r).filter((p) => p.conc === x && p.isl === len)[0];
   let ymax = 0;
   const plotted = visible.map((o) => {
     const vals = [];
@@ -103,14 +102,14 @@ async function renderEmbed(st, task, asideTop) {
   const x0 = log2(xs[0] || 1), x1 = log2(xs[xs.length - 1] || 2), span = x1 - x0 || 1;
   const px = (x) => EL + (log2(x) - x0) / span * (ER - EL), py = (y) => EB - y / yt.top * (EB - ET);
   let svg = '<line x1="' + EL + '" y1="' + EB + '" x2="' + ER + '" y2="' + EB + '" stroke="var(--faint)"/><line x1="' + EL + '" y1="' + ET + '" x2="' + EL + '" y2="' + EB + '" stroke="var(--faint)"/>';
-  xs.forEach((x) => { svg += '<line x1="' + px(x) + '" x2="' + px(x) + '" y1="' + ET + '" y2="' + EB + '" stroke="var(--grid)"/><text x="' + px(x) + '" y="' + (EB + 20) + '" text-anchor="middle">' + (xKey === 'len' ? fmtLen(x) : 'b' + x) + '</text>'; });
+  xs.forEach((x) => { svg += '<line x1="' + px(x) + '" x2="' + px(x) + '" y1="' + ET + '" y2="' + EB + '" stroke="var(--grid)"/><text x="' + px(x) + '" y="' + (EB + 20) + '" text-anchor="middle">b' + x + '</text>'; });
   yt.list.forEach((v) => { svg += '<text x="' + (EL - 8) + '" y="' + (py(v) + 4) + '" text-anchor="end">' + fmt(v) + '</text>'; });
   svg += '<text class="axis-title" x="' + (EL + ER) / 2 + '" y="' + (EH - 4) + '" text-anchor="middle">' + esc(EMBED_X[xKey].toUpperCase()) + '</text>';
   svg += '<text class="axis-title" transform="translate(14 ' + (ET + EB) / 2 + ') rotate(-90)" text-anchor="middle">' + esc(Y.label(task).toUpperCase()) + '</text>';
   if (slo && !Y.higher) svg += '<line x1="' + EL + '" x2="' + ER + '" y1="' + py(slo) + '" y2="' + py(slo) + '" stroke="var(--faint)" stroke-dasharray="2 4"/><text x="' + (ER - 4) + '" y="' + (py(slo) - 6) + '" text-anchor="end">E2EL limit ' + slo + ' s</text>';
   const tipOf = (p) => 'ISL ' + p.isl + ' · b' + p.conc + ' · ' + batchLabel(task, p.batch).split(' · ')[0]
-    + '\nInput tokens/s ' + fmt(tokensPerSec(p)) + '\n' + Y.label(task).replace(/ \(s\)$/, '') + ' ' + fmt(Y.f(p))
-    + '\nRequests/s ' + fmt(p.reqps) + (task === 'embedding' && p.batch === 1 ? ' (rate ' + p.conc + ')' : '') + '\nE2EL p50 ' + fmt(p.e2el50) + ' s · p99 ' + fmt(p.e2el99) + ' s\nDuration ' + fmt(p.duration) + ' s';
+    + '\nTotal TPS ' + fmt(tokensPerSec(p)) + '\n' + Y.label(task).replace(/ \(s\)$/, '') + ' ' + fmt(Y.f(p))
+    + '\nRPS ' + fmt(p.reqps) + (task === 'embedding' && p.batch === 1 ? ' (sent ' + p.conc + ')' : '') + '\nE2EL p50 ' + fmt(p.e2el50) + ' s · p99 ' + fmt(p.e2el99) + ' s\nDuration ' + fmt(p.duration) + ' s';
   plotted.forEach((g) => {
     if (g.vals.length > 1) svg += '<path d="' + smoothPath(g.vals.map((v) => ({ x: px(v.x), y: py(v.y) }))) + '" fill="none" stroke="' + g.o.color + '" stroke-width="2.5" stroke-dasharray="' + g.o.dash + '"/>';
     g.vals.forEach((v) => { svg += '<circle cx="' + px(v.x) + '" cy="' + py(v.y) + '" r="3.5" fill="' + g.o.color + '" stroke="var(--panel)" stroke-width="1.5"><title>' + esc(g.o.label + '\n' + tipOf(v.p)) + '</title></circle>'; });
@@ -131,7 +130,7 @@ async function renderEmbed(st, task, asideTop) {
       const k = p.ok && v > 0 && w > 0 ? (Y.higher ? v / w : w / v) : null;
       const low = task === 'embedding' && p.batch === 1 && p.reqps > 0 && p.reqps < p.conc * 0.9;  // open loop: fewer requests/s than the rate asked = overloaded
       return '<td class="num' + (p.ok ? '' : ' faint') + '" title="' + esc(tipOf(p) + (q ? '\n\n' + vsSeries.label + '\n' + tipOf(q) : '')) + '">' + (p.ok ? fmt(v) : '<span class="fail">' + esc(p.raw.fail_reason || 'failed') + '</span>')
-        + (low ? '<span class="sub muted" title="achieved requests/s below the rate asked for">' + fmt(p.reqps) + ' req/s</span>' : '')
+        + (low ? '<span class="sub muted" title="RPS achieved, below the RPS sent">' + fmt(p.reqps) + ' RPS</span>' : '')
         + (k !== null ? '<span class="sub" style="color:' + (k >= 1 ? 'var(--accent)' : 'var(--muted)') + '">' + multText(k, Y.higher) + '</span>' : '') + '</td>';
     }).join('') + '</tr>').join('') + '</tbody></table></div>';
 
@@ -139,22 +138,22 @@ async function renderEmbed(st, task, asideTop) {
     + '<svg width="28" height="10" aria-hidden="true"><line x1="0" y1="5" x2="28" y2="5" stroke="' + o.color + '" stroke-width="2" stroke-dasharray="' + o.dash + '"/></svg><span>' + esc(o.label) + '</span></label>').join('');
   const legend = '<div class="legend chart-legend">' + visible.map((o) => '<a class="run-link" title="How this run was measured" href="#run?id=' + encodeURIComponent(o.r.id) + '"><svg width="22" height="10" aria-hidden="true"><line x1="1" y1="5" x2="21" y2="5" stroke="' + o.color
     + '" stroke-width="3" stroke-linecap="round" stroke-dasharray="' + o.dash + '"/></svg><b>' + esc(hwName(o.r.hw) + ' ×' + o.r.n) + '</b><span class="mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver) + '</span><span class="faint">↗</span></a>').join('') + '</div>';
-  const held = xKey === 'len' ? 'b' + conc + ' concurrent ' + (task === 'rerank' ? 'queries' : 'requests') : 'ISL ' + len;
+  const held = 'ISL ' + len;
   const subtitle = model + ' · ' + batchLabel(task, batch) + ' · ' + held;
   EXPORTS.main = { w: EW, h: EH, title: Y.label(task), subtitle: subtitle, file: (model + '_' + task + '_b' + batch + '_' + yKey + '_vs_' + xKey).replace(/[^\w.-]+/g, '-'),
     legend: visible.map((o) => ({ color: o.color, dash: o.dash, name: hwName(o.r.hw) + ' ×' + o.r.n, ver: backendLabel(o.r.backend) + ' ' + o.r.ver })) };
   const how = task === 'rerank'
     ? 'Every request is one query with ' + batch + ' documents, each query-document pair ISL tokens long; the client sends the next request as soon as one returns (closed loop), ' + 'concurrency' + ' queries at once. Pairs/s = documents scored per second. The server reports no token usage for /v1/rerank, so input tokens/s = pairs/s × pair length.'
     : batch === 1
-      ? 'Queries: one text per request. Every user sends one request a second (request rate = concurrency), so E2EL includes any wait in the server; when a server cannot keep up, the achieved requests/s fall below the rate (marked in the grid) and the run takes longer than the arrival window.'
+      ? 'Queries: one text per request. Every user sends one request a second (RPS sent = concurrency), so E2EL includes any wait in the server; when a server cannot keep up, the RPS achieved falls below the RPS sent (marked in the grid) and the run takes longer than the arrival window.'
       : 'Indexing: ' + batch + ' chunks of ISL tokens per request, sent closed loop (the next batch as soon as one returns) at the given concurrency; input tokens/s is the indexing speed.';
   return '<div class="explorer"><aside class="panel">'
     + asideTop + select('Model', 'model', model, models)
     + select('Request', 'batch', String(batch), batches.map((b) => ({ v: String(b), label: batchLabel(task, b) })))
+    + select('ISL', 'len', String(len), lens.map((L) => ({ v: String(L), label: fmtLen(L) + ' tokens' })))
     + '<div class="ctl">Hardware · backend' + seriesList + '</div></aside><section>'
-    + '<div class="controls">' + select('X axis', 'x', xKey, Object.keys(EMBED_X).map((k) => ({ v: k, label: EMBED_X[k] })))
-    + (xKey === 'len' ? select('Concurrency', 'conc', String(conc), concs.map((c) => ({ v: String(c), label: 'b' + c }))) : select('Input length', 'len', String(len), lens.map((L) => ({ v: String(L), label: fmtLen(L) + ' tokens' }))))
-    + select('Y axis', 'y', yKey, Object.keys(EMBED_Y).map((k) => ({ v: k, label: EMBED_Y[k].label(task) })))
+    + '<div class="controls">' + select('X axis', 'x', xKey, [{ v: 'conc', label: 'Concurrency' }])
+    + select('Y axis', 'y', yKey, yKeys.map((k) => ({ v: k, label: EMBED_Y[k].label(task) })))
     + (!Y.higher ? '<label class="ctl">E2EL limit · s<input type="number" min="0" step="0.1" data-k="eslo" data-num value="' + (slo || '') + '" placeholder="none"></label>' : '') + '</div>'
     + '<div class="panel"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">' + esc(Y.label(task)) + '</h2><div class="muted">' + esc(subtitle) + '</div></div>' + downloads('main') + '</div>' + legend
     + '<div class="chart-wrap"><svg class="chart" data-chart="main" viewBox="0 0 ' + EW + ' ' + EH + '" width="100%" role="img" aria-label="' + esc(Y.label(task) + ' against ' + EMBED_X[xKey] + ' for ' + model) + '">' + svg + '<g class="hover"></g></svg><div class="hover-tip" hidden></div></div>'
