@@ -234,7 +234,7 @@ if (typeof document !== 'undefined') {
 }
 
 PAGES.explorer = async function (st) {
-  const [gen, emb] = await Promise.all([generationRuns(), embedRuns(), loadSpecs()]);
+  const [gen, emb] = await Promise.all([generationRuns(), embedRuns()]);
   // The task first: generation (text, image + text) here, embedding and rerank in embed.js with the same side panel.
   const tasks = Object.keys(TASK_LABELS).filter((t) => gen.some((r) => r.task === t) || emb.some((r) => r.task === t));
   const task = tasks.indexOf(st.task) >= 0 ? st.task : tasks[0];
@@ -319,33 +319,6 @@ PAGES.explorer = async function (st) {
     });
     return { o: o, vals: vals };
   });
-  // Hardware floor: what the device's peak allows at best, from specs.json — the weights read once per token
-  // (memory bandwidth) or the prefill's FLOPs (compute); no KV traffic, attention or inter-device transfer.
-  const floorKey = ['mem', 'compute'].indexOf(st.floor) >= 0 ? st.floor : 'none';
-  const floors = [];
-  let floorNote = '';
-  if (floorKey !== 'none') {
-    const spec = modelSpec(model), G = (v) => (v / 1e9).toFixed(1);
-    visible.forEach((o) => {
-      const h = hwSpec(o.r.hw), n = o.r.n;
-      if (!h || !spec) return;
-      const W = spec.weight_bytes_active, P = spec.params_active, dev = hwName(o.r.hw) + ' ×' + n;
-      let y = null, slope = null, text = '';
-      if (floorKey === 'mem') {
-        const t = W / (h.bandwidth_tbs * 1e12 * n), bw = h.bandwidth_tbs + ' TB/s × ' + n;
-        if (/^tpot/.test(yKey)) { y = t * 1000; text = dev + ': ' + G(W) + ' GB ÷ (' + bw + ') = ' + fmt(y) + ' ms'; }
-        else if (/^ttft/.test(yKey)) { y = t; text = dev + ': ' + G(W) + ' GB ÷ (' + bw + ') = ' + fmt(y) + ' s'; }
-      } else {
-        const f = h.fp8_tflops * 1e12 * n, fl = h.fp8_tflops + ' TFLOPS × ' + n;
-        if (/^ttft/.test(yKey)) { y = 2 * P * isl / f; text = dev + ': 2 × ' + G(P) + ' G × ' + isl + ' ÷ (' + fl + ') = ' + fmt(y) + ' s'; }
-        else if (/^tpot/.test(yKey) && xKey === 'conc') { slope = 2 * P / f * 1000; text = dev + ': 2 × ' + G(P) + ' G × b ÷ (' + fl + ') = ' + fmt(slope) + ' ms × b'; }
-      }
-      if (y !== null || slope !== null) floors.push({ o: o, y: y, slope: slope, text: text });
-    });
-    if (!spec) floorNote = ' No specs.json entry for ' + model + ', so no hardware floor.';
-    else if (!floors.length) floorNote = floorKey === 'mem' ? ' The memory-bandwidth floor is drawn for TPOT and TTFT on Y.' : ' The compute floor is drawn for TTFT on Y, and for TPOT against concurrency.';
-  }
-  floors.forEach((f) => { if (f.y !== null) ymax = Math.max(ymax, f.y); });
   const sloOnX = xKey === 'tps_user';  // the SLO is a TPS/user, so it only means something on that axis
   const rngdG = plotted.filter((g) => family(g.o.r.hw) === 'rngd')[0], gpuGs = plotted.filter((g) => family(g.o.r.hw) !== 'rngd');
   const vsG = gpuGs.filter((g) => g.o.r.id === st.vs)[0];  // none picked (the default): no arrow
@@ -353,10 +326,9 @@ PAGES.explorer = async function (st) {
   // The SLO is shown (input and line) only when something reads it: the RNGD-vs multiplier or the rack chart.
   const sloUsed = (showVs && !!vsG) || showRack;
   if (sloOnX && sloUsed) xmax = Math.max(xmax, slo);
-  const logY = ['log', 'linear'].indexOf(st.yscale) >= 0 ? st.yscale === 'log' : floors.length > 0;
+  const logY = st.yscale === 'log';
   let ymin = Infinity;
   plotted.forEach((g) => g.vals.forEach((v) => { if (v.y > 0) ymin = Math.min(ymin, v.y); }));
-  floors.forEach((f) => { if (f.y > 0) ymin = Math.min(ymin, f.y); if (f.slope > 0) ymin = Math.min(ymin, f.slope); });
   const xt = niceTicks(xmax * 1.02), yt = logY && isFinite(ymin) && ymax > 0 ? logTicks(ymin, ymax) : niceTicks(ymax * 1.05);
   const px = (x) => L + x / xt.top * (R - L);
   const py = logY && yt.bottom ? (y) => B - (Math.log10(Math.max(y, yt.bottom)) - Math.log10(yt.bottom)) / (Math.log10(yt.top) - Math.log10(yt.bottom)) * (B - T) : (y) => B - y / yt.top * (B - T);
@@ -369,16 +341,6 @@ PAGES.explorer = async function (st) {
   svg += '<text class="axis-title" transform="translate(14 ' + (T + B) / 2 + ') rotate(-90)" text-anchor="middle">' + esc(axisTitle(my)) + '</text>';
   if (sloOnX && sloUsed) svg += '<line x1="' + px(slo) + '" x2="' + px(slo) + '" y1="' + T + '" y2="' + B + '" stroke="var(--faint)" stroke-dasharray="2 4"/><text x="' + (px(slo) + 6) + '" y="' + (B - 8) + '">SLO ' + slo + '</text>';
 
-  // Hardware floors: dashed in the series' colour, flat (one value) or rising with the batch (compute floor of TPOT),
-  // each named with its value, the names stacked upward so they stay readable when the floors sit close together.
-  floors.forEach((f, i) => {
-    const y0 = f.y !== null ? f.y : 0, y1 = f.y !== null ? f.y : f.slope * xt.top, unit = /^tpot/.test(yKey) ? ' ms' : ' s';
-    const name = hwName(f.o.r.hw).replace(/^(FURIOSA|NVIDIA) /, '') + ' ×' + f.o.r.n + ' · ' + (floorKey === 'mem' ? 'memory' : 'compute') + ' floor ' + (f.y !== null ? fmt(f.y) + unit : fmt(f.slope) + unit + ' × b');
-    const pathD = f.y !== null ? 'M ' + L + ' ' + py(Math.min(y0, yt.top)) + ' L ' + R + ' ' + py(Math.min(y1, yt.top))
-      : 'M ' + Array.from({ length: 41 }, (_, k) => k / 40 * xt.top).filter((b) => b > 0).map((b) => px(b).toFixed(1) + ' ' + py(Math.min(f.slope * b, yt.top)).toFixed(1)).join(' L ');
-    svg += '<path d="' + pathD + '" fill="none" stroke="' + f.o.color + '" stroke-width="2" stroke-dasharray="6 4"><title>' + esc(f.text) + '</title></path>'
-      + '<text class="conc" x="' + (R - 4) + '" y="' + (py(Math.min(y1, yt.top)) - 6 - 13 * i) + '" text-anchor="end" style="fill:' + f.o.color + '">' + esc(name) + '</text>';  // at the right end, clear of the first batches
-  });
   // Curves are named in the legend above the chart; every measured point carries its batch size (b = concurrency).
   plotted.forEach((g) => {
     if (g.vals.length > 1) svg += '<path d="' + smoothPath(g.vals.map((v) => ({ x: px(v.x), y: py(v.y) }))) + '" fill="none" stroke="' + g.o.color + '" stroke-width="2.5" stroke-dasharray="' + g.o.dash + '"/>';
@@ -412,11 +374,8 @@ PAGES.explorer = async function (st) {
   const colHead = visible.map((o) => '<th class="num"><span style="color:' + o.color + '">●</span> ' + esc(hwName(o.r.hw) + ' ×' + o.r.n)
     + '<div class="faint mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver) + '</div></th>').join('');
   // The metric is picked from tiles; until the viewer picks one, the table follows the Y axis.
-  const floorOf = (r) => floors.filter((f) => f.o.r.id === r.id)[0];
-  const xFloor = { title: '× of hardware floor', label: () => '× of hardware floor', f: (p, r) => { const fl = floorOf(r), raw = AXES[yKey].f(p, r); return fl && raw > 0 ? raw / (fl.y !== null ? fl.y : fl.slope * p.conc) : null; } };
-  const metricOf = (k) => (k === 'xfloor' ? xFloor : k === yKey ? my : AXES[k]);
-  const tItems = Y_KEYS.filter((k) => k !== 'custom' || yKey === 'custom').map((k) => ({ key: k, name: metricOf(k).title || metricOf(k).label(), sub: k === yKey ? 'Y axis' : '' }))
-    .concat(floors.length ? [{ key: 'xfloor', name: '× of hardware floor', sub: 'measured ÷ floor · 1 = peak' }] : []);
+  const metricOf = (k) => (k === yKey ? my : AXES[k]);
+  const tItems = Y_KEYS.filter((k) => k !== 'custom' || yKey === 'custom').map((k) => ({ key: k, name: metricOf(k).title || metricOf(k).label(), sub: k === yKey ? 'Y axis' : '' }));
   const tKey = pickedKey(st, 'table', tItems, yKey), tm = metricOf(tKey);
   const tRows = concs.map((c) => '<tr><td class="num">b' + c + '</td>' + visible.map((o) => {
     const p = o.pts.filter((x) => x.conc === c)[0], v = p ? tm.f(p, o.r) : null;
@@ -438,10 +397,8 @@ PAGES.explorer = async function (st) {
     + '</b><span class="mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver) + '</span><span class="faint">↗</span></a>').join('') + '</div>';
   const kwText = [...new Set(visible.map((o) => family(o.r.hw)))].filter((f) => SERVER_KW[f]).map((f) => FAMILY_NAME[f] + ' ' + familyKw(f) + ' kW').join(', ');
   // Shown: what changes how the numbers read. Folded: the full description of the chart.
-  const floorHead = floorKey === 'mem' ? (/^tpot/.test(yKey) ? 'TPOT ≥ weights ÷ (bandwidth × devices)' : 'TTFT ≥ weights ÷ (bandwidth × devices)') : floorKey === 'compute' ? (/^ttft/.test(yKey) ? 'TTFT ≥ 2 × params × ISL ÷ (FP8 TFLOPS × devices)' : 'TPOT ≥ 2 × params × b ÷ (FP8 TFLOPS × devices)') : '';
-  const floorText = floors.length ? ' ' + floorHead + ' — ' + floors.map((f) => f.text).join('; ') + '.' : floorNote;
   const capShort = ((yKey === 'tps_kw' ? '8-card server power: ' + kwText + '.' : '') + (SCALE8 ? ' Scaled to an 8-card server (× 8 ÷ devices).' : '')
-    + (yKey === 'custom' ? ' y = ' + formula + '.' : '') + vsMissing + floorText).trim();
+    + (yKey === 'custom' ? ' y = ' + formula + '.' : '') + vsMissing).trim();
   const caption = model + ', ' + shapeLabel(scen) + ' ISL/OSL. ' + visible.map((o) => o.label).join(', ') + '.'
     + (yKey === 'tps_kw' ? ' Per-device throughput scaled to 8-card server power: ' + kwText + '.' : '')
     + (SCALE8 ? ' Output TPS, total TPS and power are scaled to an 8-card server (× 8 / devices measured).' : '');
@@ -508,7 +465,6 @@ PAGES.explorer = async function (st) {
     + (scaleUsed ? select('Scale', 'scale', SCALE8 ? '8card' : 'measured', [{ v: 'measured', label: 'As measured' }, { v: '8card', label: 'Per 8-card server' }]) : '') + (sloUsed ? sloInput(slo) : '')
     + (showVs ? select('× RNGD vs', 'vs', vsG ? vsG.o.r.id : 'none', [{ v: 'none', label: 'None' }].concat(gpuGs.map((g) => ({ v: g.o.r.id, label: g.o.label })))) : '')
     + select('Rack capacity', 'rackview', showRack ? 'show' : 'hide', [{ v: 'hide', label: 'Hide' }, { v: 'show', label: 'Show' }])
-    + select('Hardware floor', 'floor', floorKey, [{ v: 'none', label: 'None' }, { v: 'mem', label: 'Memory bandwidth' }, { v: 'compute', label: 'Compute · FP8' }])
     + select('Y scale', 'yscale', logY ? 'log' : 'linear', [{ v: 'linear', label: 'Linear' }, { v: 'log', label: 'Log' }])
     // Server power of each device family on the chart, when a number depends on it (TPS per kW, rack).
     + (yKey === 'tps_kw' || showRack ? serverKwInputs([...new Set(visible.map((o) => family(o.r.hw)))].sort((a, b) => FAMILY_ORDER[a] - FAMILY_ORDER[b])) : '') + '</div>'

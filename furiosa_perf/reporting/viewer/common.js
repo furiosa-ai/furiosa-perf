@@ -81,17 +81,6 @@ const GEN_TASKS = { 'text': 'Text', 'image-text': 'Image + text' };
 // Every task the Explorer shows, in its order: generation first, then the pooling tasks (embed.js).
 const TASK_LABELS = { 'text': 'Text', 'image-text': 'Image + text', 'embedding': 'Embedding', 'rerank': 'Rerank' };
 
-// ---- hardware and model specs (specs.json next to the page) ----------------------------------------
-// hardware: per device family (rngd, h100, h200, rtx) the peak bandwidth (TB/s) and FP8 dense TFLOPS;
-// models: active parameters and weight bytes (experts x top_k / experts, no vision encoder). Optional file.
-async function loadSpecs() {
-  if (DATA.specs === undefined) {
-    try { const r = await fetch('specs.json', { cache: 'no-cache' }); DATA.specs = r.ok ? await r.json() : null; } catch (e) { DATA.specs = null; }
-  }
-  return DATA.specs;
-}
-function hwSpec(hw) { return ((DATA.specs || {}).hardware || {})[family(hw)] || null; }
-function modelSpec(model) { return ((DATA.specs || {}).models || {})[model] || null; }
 
 function shapeOptions(runs) {
   const set = {};
