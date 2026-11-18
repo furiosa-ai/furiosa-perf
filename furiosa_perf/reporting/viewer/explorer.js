@@ -87,13 +87,22 @@ function niceTicks(max) {
   for (let v = 0; v <= top + step / 1000; v += step) list.push(+v.toFixed(6));
   return { top: top, list: list };
 }
+// Catmull-Rom through the points, each segment's control points kept inside the segment's box so a steep step
+// (b32 → b64 TTFT going from 0.3 s to 58 s) never overshoots or dips below the axis.
 function smoothPath(pts) {
   let d = 'M ' + pts[0].x.toFixed(1) + ' ' + pts[0].y.toFixed(1);
+  const clamp = (v, a, b) => Math.min(Math.max(v, Math.min(a, b)), Math.max(a, b));
   for (let i = 0; i < pts.length - 1; i++) {
     const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
-    d += ' C ' + [p1.x + (p2.x - p0.x) / 6, p1.y + (p2.y - p0.y) / 6, p2.x - (p3.x - p1.x) / 6, p2.y - (p3.y - p1.y) / 6, p2.x, p2.y].map((n) => n.toFixed(1)).join(' ');
+    d += ' C ' + [clamp(p1.x + (p2.x - p0.x) / 6, p1.x, p2.x), clamp(p1.y + (p2.y - p0.y) / 6, p1.y, p2.y), clamp(p2.x - (p3.x - p1.x) / 6, p1.x, p2.x), clamp(p2.y - (p3.y - p1.y) / 6, p1.y, p2.y), p2.x, p2.y].map((n) => n.toFixed(1)).join(' ');
   }
   return d;
+}
+// Log-scale ticks: every decade from below the smallest value to above the largest, 2× and 5× between when few.
+function logTicks(min, max) {
+  const lo = Math.floor(Math.log10(min)), hi = Math.ceil(Math.log10(max)), list = [];
+  for (let k = lo; k <= hi; k++) [1, 2, 5].forEach((m) => { if (hi - lo > 3 && m !== 1) return; const v = m * Math.pow(10, k); if (v >= Math.pow(10, lo) && v <= Math.pow(10, hi)) list.push(v); });
+  return { bottom: Math.pow(10, lo), top: Math.pow(10, hi), list: list };
 }
 function yAtX(vals, x) {
   const s = vals.slice().sort((a, b) => a.x - b.x);
@@ -119,7 +128,7 @@ function hoverAt(e) {
   pt.x = e.clientX; pt.y = e.clientY;
   const q = pt.matrixTransform(svg.getScreenCTM().inverse()), h = HOVER;
   if (q.x < L || q.x > R || q.y < T || q.y > B) { g.innerHTML = ''; tip.hidden = true; return; }
-  const x = (q.x - L) / (R - L) * h.xtop, py = (y) => B - y / h.ytop * (B - T);
+  const x = (q.x - L) / (R - L) * h.xtop, py = h.py || ((y) => B - y / h.ytop * (B - T));
   let marks = '<line x1="' + q.x + '" x2="' + q.x + '" y1="' + T + '" y2="' + B + '" stroke="var(--muted)" stroke-width="1"/>', rows = '';
   h.curves.forEach((c) => {
     const y = yAtX(c.vals, x);
@@ -344,12 +353,17 @@ PAGES.explorer = async function (st) {
   // The SLO is shown (input and line) only when something reads it: the RNGD-vs multiplier or the rack chart.
   const sloUsed = (showVs && !!vsG) || showRack;
   if (sloOnX && sloUsed) xmax = Math.max(xmax, slo);
-  const xt = niceTicks(xmax * 1.02), yt = niceTicks(ymax * 1.05);
-  const px = (x) => L + x / xt.top * (R - L), py = (y) => B - y / yt.top * (B - T);
+  const logY = ['log', 'linear'].indexOf(st.yscale) >= 0 ? st.yscale === 'log' : floors.length > 0;
+  let ymin = Infinity;
+  plotted.forEach((g) => g.vals.forEach((v) => { if (v.y > 0) ymin = Math.min(ymin, v.y); }));
+  floors.forEach((f) => { if (f.y > 0) ymin = Math.min(ymin, f.y); if (f.slope > 0) ymin = Math.min(ymin, f.slope); });
+  const xt = niceTicks(xmax * 1.02), yt = logY && isFinite(ymin) && ymax > 0 ? logTicks(ymin, ymax) : niceTicks(ymax * 1.05);
+  const px = (x) => L + x / xt.top * (R - L);
+  const py = logY && yt.bottom ? (y) => B - (Math.log10(Math.max(y, yt.bottom)) - Math.log10(yt.bottom)) / (Math.log10(yt.top) - Math.log10(yt.bottom)) * (B - T) : (y) => B - y / yt.top * (B - T);
 
   let svg = '<line x1="' + L + '" y1="' + B + '" x2="' + R + '" y2="' + B + '" stroke="var(--faint)"/><line x1="' + L + '" y1="' + T + '" x2="' + L + '" y2="' + B + '" stroke="var(--faint)"/>';
   xt.list.forEach((v) => { svg += '<text x="' + px(v) + '" y="' + (B + 20) + '" text-anchor="middle">' + fmt(v) + '</text>'; });
-  yt.list.forEach((v) => { svg += '<text x="' + (L - 8) + '" y="' + (py(v) + 4) + '" text-anchor="end">' + fmt(v) + '</text>'; });
+  yt.list.forEach((v) => { svg += (logY ? '<line x1="' + L + '" x2="' + R + '" y1="' + py(v) + '" y2="' + py(v) + '" stroke="var(--grid)"/>' : '') + '<text x="' + (L - 8) + '" y="' + (py(v) + 4) + '" text-anchor="end">' + fmt(v) + '</text>'; });
   const axisTitle = (a) => (a.axis || a.label()).toUpperCase().replace(/KW\b/g, 'kW');
   svg += '<text class="axis-title" x="' + (L + R) / 2 + '" y="' + (H - 4) + '" text-anchor="middle">' + esc(axisTitle(mx)) + '</text>';
   svg += '<text class="axis-title" transform="translate(14 ' + (T + B) / 2 + ') rotate(-90)" text-anchor="middle">' + esc(axisTitle(my)) + '</text>';
@@ -360,7 +374,9 @@ PAGES.explorer = async function (st) {
   floors.forEach((f, i) => {
     const y0 = f.y !== null ? f.y : 0, y1 = f.y !== null ? f.y : f.slope * xt.top, unit = /^tpot/.test(yKey) ? ' ms' : ' s';
     const name = hwName(f.o.r.hw).replace(/^(FURIOSA|NVIDIA) /, '') + ' ×' + f.o.r.n + ' · ' + (floorKey === 'mem' ? 'memory' : 'compute') + ' floor ' + (f.y !== null ? fmt(f.y) + unit : fmt(f.slope) + unit + ' × b');
-    svg += '<line x1="' + L + '" y1="' + py(Math.min(y0, yt.top)) + '" x2="' + R + '" y2="' + py(Math.min(y1, yt.top)) + '" stroke="' + f.o.color + '" stroke-width="2" stroke-dasharray="6 4"><title>' + esc(f.text) + '</title></line>'
+    const pathD = f.y !== null ? 'M ' + L + ' ' + py(Math.min(y0, yt.top)) + ' L ' + R + ' ' + py(Math.min(y1, yt.top))
+      : 'M ' + Array.from({ length: 41 }, (_, k) => k / 40 * xt.top).filter((b) => b > 0).map((b) => px(b).toFixed(1) + ' ' + py(Math.min(f.slope * b, yt.top)).toFixed(1)).join(' L ');
+    svg += '<path d="' + pathD + '" fill="none" stroke="' + f.o.color + '" stroke-width="2" stroke-dasharray="6 4"><title>' + esc(f.text) + '</title></path>'
       + '<text class="conc" x="' + (R - 4) + '" y="' + (py(Math.min(y1, yt.top)) - 6 - 13 * i) + '" text-anchor="end" style="fill:' + f.o.color + '">' + esc(name) + '</text>';  // at the right end, clear of the first batches
   });
   // Curves are named in the legend above the chart; every measured point carries its batch size (b = concurrency).
@@ -396,8 +412,11 @@ PAGES.explorer = async function (st) {
   const colHead = visible.map((o) => '<th class="num"><span style="color:' + o.color + '">●</span> ' + esc(hwName(o.r.hw) + ' ×' + o.r.n)
     + '<div class="faint mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver) + '</div></th>').join('');
   // The metric is picked from tiles; until the viewer picks one, the table follows the Y axis.
-  const metricOf = (k) => (k === yKey ? my : AXES[k]);
-  const tItems = Y_KEYS.filter((k) => k !== 'custom' || yKey === 'custom').map((k) => ({ key: k, name: metricOf(k).title || metricOf(k).label(), sub: k === yKey ? 'Y axis' : '' }));
+  const floorOf = (r) => floors.filter((f) => f.o.r.id === r.id)[0];
+  const xFloor = { title: '× of hardware floor', label: () => '× of hardware floor', f: (p, r) => { const fl = floorOf(r), raw = AXES[yKey].f(p, r); return fl && raw > 0 ? raw / (fl.y !== null ? fl.y : fl.slope * p.conc) : null; } };
+  const metricOf = (k) => (k === 'xfloor' ? xFloor : k === yKey ? my : AXES[k]);
+  const tItems = Y_KEYS.filter((k) => k !== 'custom' || yKey === 'custom').map((k) => ({ key: k, name: metricOf(k).title || metricOf(k).label(), sub: k === yKey ? 'Y axis' : '' }))
+    .concat(floors.length ? [{ key: 'xfloor', name: '× of hardware floor', sub: 'measured ÷ floor · 1 = peak' }] : []);
   const tKey = pickedKey(st, 'table', tItems, yKey), tm = metricOf(tKey);
   const tRows = concs.map((c) => '<tr><td class="num">b' + c + '</td>' + visible.map((o) => {
     const p = o.pts.filter((x) => x.conc === c)[0], v = p ? tm.f(p, o.r) : null;
@@ -406,7 +425,7 @@ PAGES.explorer = async function (st) {
   const tables = pickTiles('table', tItems, tKey) + '<div class="picked"><h3>' + esc(tm.title || tm.label()) + '</h3>'
     + '<div class="scroll"><table class="list"><thead><tr><th class="num">Batch</th>' + colHead + '</tr></thead><tbody>' + tRows + '</tbody></table></div></div>';
   HOVER = {
-    xtop: xt.top, ytop: yt.top, xLabel: mx.label(), yLabel: my.label(),
+    xtop: xt.top, ytop: yt.top, py: py, xLabel: mx.label(), yLabel: my.label(),
     curves: plotted.map((g) => ({ label: hwName(g.o.r.hw) + ' ×' + g.o.r.n + ' · ' + g.o.r.ver, color: g.o.color, vals: g.vals })).filter((c) => c.vals.length),
   };
 
@@ -490,6 +509,7 @@ PAGES.explorer = async function (st) {
     + (showVs ? select('× RNGD vs', 'vs', vsG ? vsG.o.r.id : 'none', [{ v: 'none', label: 'None' }].concat(gpuGs.map((g) => ({ v: g.o.r.id, label: g.o.label })))) : '')
     + select('Rack capacity', 'rackview', showRack ? 'show' : 'hide', [{ v: 'hide', label: 'Hide' }, { v: 'show', label: 'Show' }])
     + select('Hardware floor', 'floor', floorKey, [{ v: 'none', label: 'None' }, { v: 'mem', label: 'Memory bandwidth' }, { v: 'compute', label: 'Compute · FP8' }])
+    + select('Y scale', 'yscale', logY ? 'log' : 'linear', [{ v: 'linear', label: 'Linear' }, { v: 'log', label: 'Log' }])
     // Server power of each device family on the chart, when a number depends on it (TPS per kW, rack).
     + (yKey === 'tps_kw' || showRack ? serverKwInputs([...new Set(visible.map((o) => family(o.r.hw)))].sort((a, b) => FAMILY_ORDER[a] - FAMILY_ORDER[b])) : '') + '</div>'
     + '<div class="panel' + (showRack ? ' joined' : '') + '"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">' + esc(my.title || my.label()) + (showRack ? ' <span class="faint">→</span> Users per rack' : '') + '</h2><div class="muted">' + esc(scenText) + ' · ' + esc(GEN_TASKS[task].toLowerCase()) + '</div></div>'
