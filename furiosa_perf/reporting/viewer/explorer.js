@@ -355,11 +355,13 @@ PAGES.explorer = async function (st) {
   svg += '<text class="axis-title" transform="translate(14 ' + (T + B) / 2 + ') rotate(-90)" text-anchor="middle">' + esc(axisTitle(my)) + '</text>';
   if (sloOnX && sloUsed) svg += '<line x1="' + px(slo) + '" x2="' + px(slo) + '" y1="' + T + '" y2="' + B + '" stroke="var(--faint)" stroke-dasharray="2 4"/><text x="' + (px(slo) + 6) + '" y="' + (B - 8) + '">SLO ' + slo + '</text>';
 
-  // Hardware floors: dashed in the series' colour, flat (one value) or rising with the batch (compute floor of TPOT).
+  // Hardware floors: dashed in the series' colour, flat (one value) or rising with the batch (compute floor of TPOT),
+  // each named with its value, the names stacked upward so they stay readable when the floors sit close together.
   floors.forEach((f, i) => {
-    const y0 = f.y !== null ? f.y : 0, y1 = f.y !== null ? f.y : f.slope * xt.top;
-    svg += '<line x1="' + L + '" y1="' + py(Math.min(y0, yt.top)) + '" x2="' + R + '" y2="' + py(Math.min(y1, yt.top)) + '" stroke="' + f.o.color + '" stroke-width="1.5" stroke-dasharray="8 5" opacity="0.85"><title>' + esc(f.text) + '</title></line>'
-      + (i ? '' : '<text class="conc" x="' + (R - 4) + '" y="' + (py(Math.min(y1, yt.top)) - 5) + '" text-anchor="end" style="fill:var(--muted)">' + (floorKey === 'mem' ? 'memory floor' : 'compute floor') + '</text>');
+    const y0 = f.y !== null ? f.y : 0, y1 = f.y !== null ? f.y : f.slope * xt.top, unit = /^tpot/.test(yKey) ? ' ms' : ' s';
+    const name = hwName(f.o.r.hw).replace(/^(FURIOSA|NVIDIA) /, '') + ' ×' + f.o.r.n + ' · ' + (floorKey === 'mem' ? 'memory' : 'compute') + ' floor ' + (f.y !== null ? fmt(f.y) + unit : fmt(f.slope) + unit + ' × b');
+    svg += '<line x1="' + L + '" y1="' + py(Math.min(y0, yt.top)) + '" x2="' + R + '" y2="' + py(Math.min(y1, yt.top)) + '" stroke="' + f.o.color + '" stroke-width="2" stroke-dasharray="6 4"><title>' + esc(f.text) + '</title></line>'
+      + '<text class="conc" x="' + (R - 4) + '" y="' + (py(Math.min(y1, yt.top)) - 6 - 13 * i) + '" text-anchor="end" style="fill:' + f.o.color + '">' + esc(name) + '</text>';  // at the right end, clear of the first batches
   });
   // Curves are named in the legend above the chart; every measured point carries its batch size (b = concurrency).
   plotted.forEach((g) => {
