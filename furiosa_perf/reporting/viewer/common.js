@@ -21,13 +21,19 @@ function featuredFor(ver) { const f = DATA.featured || {}; return f[ver] || f.de
 
 // One point of a fixed-length run, with the fields the pages use. `raw` keeps every recorded value.
 function toPoint(raw) {
-  const out = raw['Output Throughput(tok/s)'];
+  const out = raw['Output Throughput(tok/s)'], total = raw['Total Throughput(tok/s)'], seq = raw['Sequence Throughput(seq/s)'];
+  const generates = raw['Output Tokens'] > 0;  // embedding and rerank points have no output tokens
   return {
-    isl: raw['Input Tokens'], osl: raw['Output Tokens'], conc: raw['Concurrent'], out: out, total: raw['Total Throughput(tok/s)'],
+    isl: raw['Input Tokens'], osl: raw['Output Tokens'], conc: raw['Concurrent'], out: out, total: total,
+    image: raw['Image'] || '',  // image-text: the image sent with every request, e.g. 512x512
+    batch: raw['Inputs per Request'] || 1,  // embedding: texts per request; rerank: documents per query
+    seq: seq,  // embedding: texts/s; rerank: query-document pairs/s
+    reqps: raw['Request Throughput(req/s)'], e2el50: raw['Median E2EL(s)'], e2el99: raw['P99 E2EL(s)'], duration: raw['active_s'],
     ttft50: raw['Median TTFT(s)'], ttft99: raw['P99 TTFT(s)'], tpot50: raw['Median TPOT(ms)'], tpot99: raw['P99 TPOT(ms)'],
     power: raw['mean_power'],
-    // Results of the presets judge each point (ok); older ones only tell a failed point by no output.
-    ok: (raw.ok === undefined || !!raw.ok) && out > 0,
+    // Results of the presets judge each point (ok); older ones only tell a failed point by no throughput.
+    // A point that completed no request measured nothing whatever it says (rerank past the model's length).
+    ok: (raw.ok === undefined || !!raw.ok) && raw.completed !== 0 && (generates ? out > 0 : total > 0 || seq > 0),
     raw: raw,
   };
 }
@@ -42,9 +48,19 @@ async function loadPoints(runs) {
   }));
 }
 
-// Points of one ISL/OSL pair, by concurrency.
-function pointsAt(run, isl, osl) {
-  return (DATA.points[run.id] || []).filter((p) => p.isl === isl && p.osl === osl).sort((a, b) => a.conc - b.conc);
+// A scenario of a fixed-length run: '<isl>/<osl>', or '<isl>/<osl>@<WxH>' when an image is sent with every request.
+function shapeParts(s) {
+  const [pair, img] = String(s || '0/0').split('@'), [isl, osl] = pair.split('/').map(Number);
+  return { isl: isl, osl: osl, img: img || '' };
+}
+// '768/1024 · 512² image' — the image size as the preset names it (square) or WxH.
+function imageLabel(img) { const m = /^(\d+)x(\d+)$/.exec(img || ''); return !m ? img : m[1] === m[2] ? m[1] + '²' : m[1] + '×' + m[2]; }
+function shapeLabel(s) { const x = shapeParts(s); return x.isl + '/' + x.osl + (x.img ? ' · ' + imageLabel(x.img) + ' image' : ''); }
+
+// Points of one scenario (ISL/OSL pair and, for image-text, the image), by concurrency.
+function pointsAt(run, isl, osl, img) {
+  const scen = typeof isl === 'string' ? shapeParts(isl) : { isl: isl, osl: osl, img: img || '' };
+  return (DATA.points[run.id] || []).filter((p) => p.isl === scen.isl && p.osl === scen.osl && (p.image || '') === scen.img).sort((a, b) => a.conc - b.conc);
 }
 
 // The newest run of each identical measurement (same platform, layout, task, model and server options).
@@ -65,12 +81,14 @@ const GEN_TASKS = { 'text': 'Text', 'image-text': 'Image + text' };
 
 function shapeOptions(runs) {
   const set = {};
-  runs.forEach((r) => (r.shapes || []).forEach((s) => { set[s] = s.split('/').map(Number); }));
-  return Object.keys(set).sort((a, b) => set[a][0] - set[b][0] || set[a][1] - set[b][1]);
+  runs.forEach((r) => (r.shapes || []).forEach((s) => { set[s] = shapeParts(s); }));
+  const imgPx = (x) => x.img.split('x').reduce((a, b) => a * (+b || 1), 1);
+  return Object.keys(set).sort((a, b) => set[a].isl - set[b].isl || set[a].osl - set[b].osl || imgPx(set[a]) - imgPx(set[b]));
 }
 function pickShape(want, options) {
   return options.indexOf(want) >= 0 ? want : options.indexOf('1024/1024') >= 0 ? '1024/1024' : options[0];
 }
+function shapeSelect(key, scen, scens) { return select('ISL / OSL', key, scen, scens.map((s) => ({ v: s, label: shapeLabel(s) }))); }
 
 // ---- platforms -----------------------------------------------------------------------------------
 function verKey(v) {
@@ -282,12 +300,12 @@ function multText(k, higher) {
   if (higher || Math.abs(k - 1) < 0.005) return k.toFixed(2) + '×';  // no "faster"/"slower" for a change that rounds away
   return k >= 1 ? k.toFixed(2) + '× faster' : (1 / k).toFixed(2) + '× slower';
 }
-function batchChart(M, series, ratio, isl, osl) {
+function batchChart(M, series, ratio, scen) {
   const val = (s, c) => {
-    const p = pointsAt(s.run, isl, osl).filter((q) => q.ok && q.conc === c)[0], v = p ? M.point.f(p, s.run) : null;
+    const p = pointsAt(s.run, scen).filter((q) => q.ok && q.conc === c)[0], v = p ? M.point.f(p, s.run) : null;
     return v === null || v === undefined || !isFinite(v) ? null : v;
   };
-  const concs = [...new Set(series.flatMap((s) => pointsAt(s.run, isl, osl).map((p) => p.conc)))].sort((a, b) => a - b);
+  const concs = [...new Set(series.flatMap((s) => pointsAt(s.run, scen).map((p) => p.conc)))].sort((a, b) => a - b);
   const rows = concs.map((c) => ({ c: c, v: series.map((s) => val(s, c)) })).filter((x) => x.v.some((v) => v !== null));
   if (!rows.length) return '<div class="empty">No measured batches.</div>';
   const W = 900, H = 230, L = 70, R = 880, T = 30, B = 190, yt = niceTicks(Math.max(...rows.flatMap((x) => x.v.map((v) => v || 0))) * 1.12);
@@ -383,8 +401,8 @@ function metricText(metric, M, slo, rackKw) {
 // How much better run b is than run a on a per-batch metric (M.point): the geometric mean, over the batches both
 // measured, of b's value over a's (oriented so > 1 is better). The peak or batch 1 alone misses a release that
 // moved the middle batches. null when they share no batch.
-function batchRatio(M, isl, osl, a, b) {
-  const at = (run) => Object.fromEntries(pointsAt(run, isl, osl).filter((p) => p.ok).map((p) => [p.conc, M.point.f(p, run)]));
+function batchRatio(M, scen, a, b) {
+  const at = (run) => Object.fromEntries(pointsAt(run, scen).filter((p) => p.ok).map((p) => [p.conc, M.point.f(p, run)]));
   const va = at(a), vb = at(b), logs = [];
   Object.keys(va).forEach((c) => { const x = va[c], y = vb[c]; if (x > 0 && y > 0) logs.push(Math.log(M.higher ? y / x : x / y)); });
   return logs.length ? Math.exp(logs.reduce((s, v) => s + v, 0) / logs.length) : null;

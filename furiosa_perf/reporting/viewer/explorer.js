@@ -242,10 +242,10 @@ PAGES.explorer = async function (st) {
   const showRack = st.rackview === 'show';  // off by default: only when the viewer asks for it
   const slo = st.slo > 0 ? st.slo : 20;
   if (!scen) return '<div class="status">No fixed-length generation results.</div>';
-  const [isl, osl] = scen.split('/').map(Number);
+  const { isl, osl, img } = shapeParts(scen), scenText = 'ISL ' + isl + ' / OSL ' + osl + (img ? ' · ' + imageLabel(img) + ' image' : '');
 
   await loadPoints(tRuns);
-  const all = tRuns.map((r) => ({ r: r, pts: pointsAt(r, isl, osl), label: seriesLabel(r) }))
+  const all = tRuns.map((r) => ({ r: r, pts: pointsAt(r, scen), label: seriesLabel(r) }))
     .filter((o) => o.pts.length)
     .sort((a, b) => famOrder(a.r.hw) - famOrder(b.r.hw) || a.r.n - b.r.n || cmpVer(b.r.ver, a.r.ver));
   // The newest version measured here gets the strong colour, older ones the light one.
@@ -383,10 +383,10 @@ PAGES.explorer = async function (st) {
   // Shown: what changes how the numbers read. Folded: the full description of the chart.
   const capShort = ((yKey === 'tps_kw' ? '8-card server power: ' + kwText + '.' : '') + (SCALE8 ? ' Scaled to an 8-card server (× 8 ÷ devices).' : '')
     + (yKey === 'custom' ? ' y = ' + formula + '.' : '') + vsMissing).trim();
-  const caption = model + ', ' + isl + '/' + osl + ' ISL/OSL. ' + visible.map((o) => o.label).join(', ') + '.'
+  const caption = model + ', ' + shapeLabel(scen) + ' ISL/OSL. ' + visible.map((o) => o.label).join(', ') + '.'
     + (yKey === 'tps_kw' ? ' Per-device throughput scaled to 8-card server power: ' + kwText + '.' : '')
     + (SCALE8 ? ' Output TPS, total TPS and power are scaled to an 8-card server (× 8 / devices measured).' : '');
-  const subtitle = model + ' · ISL ' + isl + ' / OSL ' + osl + ' · ' + GEN_TASKS[task].toLowerCase(), fileBase = [model, isl + '-' + osl].join('_');
+  const subtitle = model + ' · ' + scenText + ' · ' + GEN_TASKS[task].toLowerCase(), fileBase = [model, isl + '-' + osl + (img ? '-' + img : '')].join('_');
   EXPORTS.main = {
     w: W, h: H, title: my.title || my.label(), subtitle: subtitle, file: (fileBase + '_' + yKey + '_vs_' + xKey).replace(/[^\w.-]+/g, '-'),
     legend: visible.map((o) => ({ color: o.color, dash: o.dash, name: hwName(o.r.hw) + ' ×' + o.r.n, ver: backendLabel(o.r.backend) + ' ' + o.r.ver })),
@@ -443,7 +443,7 @@ PAGES.explorer = async function (st) {
 
   return '<div class="explorer"><aside class="panel">'
     + select('Model', 'model', model, models) + select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] })))
-    + select('ISL / OSL', 'scen', scen, scens)
+    + shapeSelect('scen', scen, scens)
     + '<div class="ctl">Hardware · backend' + seriesList + '</div>'
     + '</aside><section><div class="controls">' + select('X axis', 'x', xKey, axisOptions(X_KEYS)) + select('Y axis', 'y', yKey, axisOptions(Y_KEYS))
     + (scaleUsed ? select('Scale', 'scale', SCALE8 ? '8card' : 'measured', [{ v: 'measured', label: 'As measured' }, { v: '8card', label: 'Per 8-card server' }]) : '') + (sloUsed ? sloInput(slo) : '')
@@ -451,13 +451,13 @@ PAGES.explorer = async function (st) {
     + select('Rack capacity', 'rackview', showRack ? 'show' : 'hide', [{ v: 'hide', label: 'Hide' }, { v: 'show', label: 'Show' }])
     // Server power of each device family on the chart, when a number depends on it (TPS per kW, rack).
     + (yKey === 'tps_kw' || showRack ? serverKwInputs([...new Set(visible.map((o) => family(o.r.hw)))].sort((a, b) => FAMILY_ORDER[a] - FAMILY_ORDER[b])) : '') + '</div>'
-    + '<div class="panel' + (showRack ? ' joined' : '') + '"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">' + esc(my.title || my.label()) + (showRack ? ' <span class="faint">→</span> Users per rack' : '') + '</h2><div class="muted">ISL ' + isl + ' / OSL ' + osl + ' · ' + esc(GEN_TASKS[task].toLowerCase()) + '</div></div>'
+    + '<div class="panel' + (showRack ? ' joined' : '') + '"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">' + esc(my.title || my.label()) + (showRack ? ' <span class="faint">→</span> Users per rack' : '') + '</h2><div class="muted">' + esc(scenText) + ' · ' + esc(GEN_TASKS[task].toLowerCase()) + '</div></div>'
     + downloads(showRack ? 'both' : 'main') + '</div>' + legend
     + (showRack ? '<div class="pair"><div class="curve"><div class="col-head"><h3>' + esc(my.title || my.label()) + '</h3>' + downloads('main') + '</div>' : '')
     + '<div class="chart-wrap"><svg class="chart" data-chart="main" viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="' + esc(my.label() + ' against ' + mx.label() + ' for ' + model) + '">' + svg + '<g class="hover"></g></svg><div class="hover-tip" hidden></div></div>'
     + (showRack ? '</div>' + rackCol + '</div>' : '')
     + note('explorer', (capShort + (showRack ? (capShort.indexOf('server power') < 0 ? ' 8-card server power: ' + kwText + '.' : '') + ' ≥ = lower bound.' : '')).trim(), caption + (showRack ? ' ' + rackNote : '')) + '</div>'+ customPanel
-    + '<div class="panel batches"><div class="panel-head"><h2 style="font-weight:400;font-size:18px">Measured batches</h2><span class="muted">ISL ' + isl + ' / OSL ' + osl + ' · pick a metric, failed points greyed</span></div>'
+    + '<div class="panel batches"><div class="panel-head"><h2 style="font-weight:400;font-size:18px">Measured batches</h2><span class="muted">' + esc(scenText) + ' · pick a metric, failed points greyed</span></div>'
     + tables + '</div></section></div>';
 };
 

@@ -233,11 +233,22 @@ def _columns(points: list[dict[str, Any]]) -> dict[str, list[Any]]:
 
 
 def _shapes(points: list[dict[str, Any]]) -> list[str]:
-    pairs = {(p["Input Tokens"], p["Output Tokens"]) for p in points if "Input Tokens" in p and "Output Tokens" in p}
-    return [f"{i}/{o}" for i, o in sorted(pairs)]
+    """The ISL/OSL pairs a run measured, ``<isl>/<osl>``; image-text points add their image, ``<isl>/<osl>@<WxH>``,
+    so the three image sizes of the preset stay three scenarios (the viewer splits on ``@``)."""
+    shapes = set()
+    for p in points:
+        if "Input Tokens" not in p or "Output Tokens" not in p:
+            continue
+        image = p.get("Image")
+        shapes.add((p["Input Tokens"], p["Output Tokens"], str(image) if image else ""))
+    return [f"{i}/{o}" + (f"@{img}" if img else "") for i, o, img in sorted(shapes)]
 
 
 def _failed(point: dict[str, Any]) -> bool:
+    # A point that completed no request measured nothing, whatever it reported (rerank points past the model's
+    # length were recorded ok with 0 completed).
+    if point.get("completed") == 0:
+        return True
     if "ok" in point:
         return not point["ok"]
     # Older results were not judged: a point failed when it measured no throughput

@@ -32,18 +32,17 @@ PAGES.releases = async function (st) {
   const SORTS = { total: 'Total', latest: 'Latest release', abs: 'Biggest change (±)' };
   const sort = SORTS[st.sort] ? st.sort : 'total';
   const controls = sideGroup('RNGD', select('Devices', 'dev', dev, [{ v: 'all', label: 'All device counts' }].concat(devs.map((n) => ({ v: String(n), label: 'RNGD ×' + n })))))
-    + sideGroup('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] }))) + select('ISL / OSL', 'scen', scen, scens)
+    + sideGroup('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] }))) + shapeSelect('scen', scen, scens)
       + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '') + (M.kw ? serverKwInputs(['rngd']) : ''))
     + sideGroup('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label }))) + select('Sort by', 'sort', sort, Object.keys(SORTS).map((k) => ({ v: k, label: SORTS[k] }))) + showSelect(show, featured));
   const page = (body) => sidePage('Releases', controls, body);
   if (!scen) return page('<div class="status">No RNGD results.</div>');
 
   await loadPoints(sel);
-  const [isl, osl] = scen.split('/').map(Number);
   // One row per model × device count, one column per release.
   const vers = [], byRow = {}, runsOf = {}, flags = {}, dates = {};
   sel.forEach((r) => {
-    const pts = pointsAt(r, isl, osl), m = pts.length ? M.f(pts, r, slo, rackKw) : null;
+    const pts = pointsAt(r, scen), m = pts.length ? M.f(pts, r, slo, rackKw) : null;
     if (!m || !(m.v > 0)) return;
     if (vers.indexOf(r.ver) < 0) vers.push(r.ver);
     const k = r.model + '|' + r.n;
@@ -57,7 +56,7 @@ PAGES.releases = async function (st) {
   // Ratio of the newer release to the older, oriented so that > 1 is an improvement.
   // Per-batch metrics compare every batch both releases measured (batchRatio), the others their one value.
   const better = (k, va, vb) => {
-    const x = M.point ? batchRatio(M, isl, osl, runsOf[k][va], runsOf[k][vb]) : null, a = byRow[k][va], b = byRow[k][vb];
+    const x = M.point ? batchRatio(M, scen, runsOf[k][va], runsOf[k][vb]) : null, a = byRow[k][va], b = byRow[k][vb];
     return x !== null ? x : M.higher ? b.v / a.v : a.v / b.v;
   };
   const rows = [];
@@ -111,7 +110,7 @@ PAGES.releases = async function (st) {
 
   // Panel heading: the metric in plain words, one line of conditions, the method folded (as on RNGD vs GPU).
   const HEAD = metricText(metric, M, slo, rackKw);
-  const cond = GEN_TASKS[task] + ', ' + scen + ' ISL/OSL. ' + (dev === 'all' ? 'Every RNGD device count.' : 'RNGD ×' + dev + '.')
+  const cond = GEN_TASKS[task] + ', ' + shapeLabel(scen) + ' ISL/OSL. ' + (dev === 'all' ? 'Every RNGD device count.' : 'RNGD ×' + dev + '.')
     + (M.kw ? ' 8-card server power: RNGD ' + serverKw('RNGD') + ' kW.' : '') + (M.slo ? ' ≥ = lower bound.' : '');
   const how = HEAD[1] + (M.point ? ' Pick a model to see every batch, one bar per release; the multiple above each batch is the latest release over the first that measured the model.'
     : ' Each cell is the value on that release; the small figure is the multiple over the previous release that measured the model (' + (M.higher ? 'higher' : 'lower')
@@ -127,7 +126,7 @@ PAGES.releases = async function (st) {
     const r0 = sorted.filter((r) => r.key === pick)[0], rv = r0 ? relsOf(r0) : [];
     const series = rv.map((v, j) => ({ name: short(v), color: 'var(--c-red-' + Math.min(3, rv.length - 1 - j) + ')', run: runsOf[r0.key][v] }));
     const list = !r0 ? '' : pickTiles('pick', items, pick) + '<div class="picked"><h3>' + esc(r0.model) + ' <span class="faint mono">' + esc(sub(r0)) + '</span></h3>'
-      + batchChart(M, series, [series.length - 1, 0], isl, osl) + '</div>';
+      + batchChart(M, series, [series.length - 1, 0], scen) + '</div>';
     return page('<section class="panel">' + head()
       + (list || '<div class="empty">No RNGD model was measured on two or more releases for this selection.</div>') + more + '</section>');
   }

@@ -43,7 +43,7 @@ PAGES.summary = async function (st) {
     + select('Compare with', 'gpu', gpu, gpuOpts.map((k) => (k.indexOf('hw:') === 0 ? { v: k, label: k.slice(3) + ' · newest per model' } : opt(k))))
     + select('Devices', 'dev', String(dev), [{ v: 'match', label: 'Same as RNGD' }, { v: 'best', label: 'Best per side · TPS/kW' }].concat(counts.map((n) => ({ v: String(n), label: '×' + n + ' both sides' })))))
     + sideGroup('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] })))
-      + select('ISL / OSL', 'scen', scen, scens) + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '')
+      + shapeSelect('scen', scen, scens) + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '')
       + (M.kw ? serverKwInputs(['rngd', family(gpuHw || (plats[gpu] || {}).hw || '')]) : ''))
     + sideGroup('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label })))
       + showSelect(show, featured));
@@ -56,7 +56,6 @@ PAGES.summary = async function (st) {
   const hwNewest = Object.values(newestVer).reduce((a, v) => (!a || cmpVer(v, a) > 0 ? v : a), null);
   const sel = tRuns.filter((r) => (platformKey(r) === rngd || (onGpu(r) && r.ver === newestVer[r.model])) && (typeof dev !== 'number' || r.n === dev));
   await loadPoints(sel);
-  const [isl, osl] = scen.split('/').map(Number);
   const sideOf = (r) => (platformKey(r) === rngd ? 'r' : 'g');
   // The device count of each model and side, chosen once so that every metric compares the same runs.
   const ns = {};
@@ -71,7 +70,7 @@ PAGES.summary = async function (st) {
       pickN[m] = { r: rn, g: gn };
     } else if (dev === 'best') {
       const by = (side) => sel.filter((r) => r.model === m && sideOf(r) === side)
-        .map((r) => ({ n: r.n, v: (METRICS.tpkw.f(pointsAt(r, isl, osl), r, slo) || { v: -1 }).v }))
+        .map((r) => ({ n: r.n, v: (METRICS.tpkw.f(pointsAt(r, scen), r, slo) || { v: -1 }).v }))
         .sort((a, b) => b.v - a.v || a.n - b.n)[0];
       pickN[m] = { r: (by('r') || {}).n, g: (by('g') || {}).n };
     } else pickN[m] = { r: dev, g: dev };
@@ -80,7 +79,7 @@ PAGES.summary = async function (st) {
   sel.forEach((r) => {
     const side = sideOf(r);
     if (!pickN[r.model] || r.n !== pickN[r.model][side]) return;
-    const m = M.f(pointsAt(r, isl, osl), r, slo, rackKw);
+    const m = M.f(pointsAt(r, scen), r, slo, rackKw);
     if (m) (best[r.model] = best[r.model] || {})[side] = { v: m.v, n: r.n, ge: !!m.ge, run: r };
   });
   // ratio > 1 always means RNGD is better, whichever direction the metric improves in.
@@ -88,7 +87,7 @@ PAGES.summary = async function (st) {
   const list = Object.keys(best).filter((m) => best[m].r && best[m].g).map((m) => {
     const r = best[m].r, g = best[m].g;
     // Per-batch metrics: the batches both sides measured, averaged (batchRatio); the others: their one value.
-    const perBatch = M.point ? batchRatio(M, isl, osl, g.run, r.run) : null;
+    const perBatch = M.point ? batchRatio(M, scen, g.run, r.run) : null;
     const ratio = perBatch !== null ? perBatch : !g || !(g.v > 0) || !(r.v > 0) ? null : M.higher ? r.v / g.v : g.v / r.v;
     return { model: m, r: r, g: g, ratio: ratio };
   });
@@ -108,7 +107,7 @@ PAGES.summary = async function (st) {
   const items = list.map((x) => ({ key: x.model, name: x.model, sub: sub(x) + (x.ratio === null ? '' : ' · ' + multText(x.ratio, M.higher)) })), pick = M.point && list.length ? pickedKey(st, 'pick', items, items[0].key) : null;
   const x0 = list.filter((x) => x.model === pick)[0];
   const byBatch = !x0 ? '' : pickTiles('pick', items, pick) + '<div class="picked"><h3>' + esc(x0.model) + ' <span class="faint mono">' + esc(sub(x0)) + '</span></h3>'
-    + batchChart(M, [{ name: 'RNGD ×' + x0.r.n, color: 'var(--c-red-0)', run: x0.r.run }, { name: x0.g.run.hw + ' ×' + x0.g.n + ' · ' + x0.g.run.ver, color: 'var(--g-a)', run: x0.g.run }], [0, 1], isl, osl) + '</div>';
+    + batchChart(M, [{ name: 'RNGD ×' + x0.r.n, color: 'var(--c-red-0)', run: x0.r.run }, { name: x0.g.run.hw + ' ×' + x0.g.n + ' · ' + x0.g.run.ver, color: 'var(--g-a)', run: x0.g.run }], [0, 1], scen) + '</div>';
   const rows = M.point ? '' : list.map((x) => {
     // GPU bar fixed, RNGD bar = GPU × ratio (capped at 88% so the multiplier still fits; values are on the right).
     const gp = x.ratio === null ? 0 : gpuLen, rp = x.ratio === null ? 0 : Math.max(0.2, Math.min(88, gpuLen * x.ratio));
@@ -134,7 +133,7 @@ PAGES.summary = async function (st) {
   const bound = M.slo ? ' ≥: still above ' + slo + ' tok/s per user at the largest batch measured.' : '';
   const HEAD = metricText(metric, M, slo, rackKw);
   if (M.point) HEAD[1] += ' Ranked at ' + pointRead(metric) + '; pick a model to see every batch.';
-  const headSub = GEN_TASKS[task] + ', ' + scen + ' ISL/OSL.' + servers + devices + (M.slo ? ' ≥ = lower bound.' : '');
+  const headSub = GEN_TASKS[task] + ', ' + shapeLabel(scen) + ' ISL/OSL.' + servers + devices + (M.slo ? ' ≥ = lower bound.' : '');
   // Fixed title: what is compared lives in the controls, and in the panel heading and legend below.
   return page(''
     + '<section class="panel"><div class="panel-head"><div><h2>' + esc(HEAD[0]) + '</h2><div class="panel-sub">' + note('summary', headSub, HEAD[1] + bound) + '</div></div><div class="legend">'
