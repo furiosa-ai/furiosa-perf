@@ -287,7 +287,7 @@ PAGES.explorer = async function (st) {
   if (yKey === 'custom') {
     try { custom = Object.assign(custom, compileFormula(formula)); } catch (e) { custom.error = e.message; }
   }
-  let my = yKey !== 'custom' ? AXES[yKey] : {
+  const my = yKey !== 'custom' ? AXES[yKey] : {
     label: () => fname,
     f: (p, r) => {
       if (!custom.f) return null;
@@ -297,6 +297,19 @@ PAGES.explorer = async function (st) {
       return custom.f(v);
     },
   };
+  const mx = AXES[xKey];
+  // Failed points stay off the chart (the batch tables grey them).
+  let xmax = 0, ymax = 0;
+  const plotted = visible.map((o) => {
+    const vals = [];
+    o.pts.forEach((p) => {
+      const x = p.ok ? mx.f(p, o.r) : null, y = p.ok ? my.f(p, o.r) : null;
+      if (x === null || y === null || !isFinite(x) || !isFinite(y)) return;
+      xmax = Math.max(xmax, x); ymax = Math.max(ymax, y);
+      vals.push({ p: p, x: x, y: y });
+    });
+    return { o: o, vals: vals };
+  });
   // Hardware floor: what the device's peak allows at best, from specs.json — the weights read once per token
   // (memory bandwidth) or the prefill's FLOPs (compute); no KV traffic, attention or inter-device transfer.
   const floorKey = ['mem', 'compute'].indexOf(st.floor) >= 0 ? st.floor : 'none';
@@ -316,42 +329,21 @@ PAGES.explorer = async function (st) {
       } else {
         const f = h.fp8_tflops * 1e12 * n, fl = h.fp8_tflops + ' TFLOPS × ' + n;
         if (/^ttft/.test(yKey)) { y = 2 * P * isl / f; text = dev + ': 2 × ' + G(P) + ' G × ' + isl + ' ÷ (' + fl + ') = ' + fmt(y) + ' s'; }
-        else if (/^tpot/.test(yKey)) { slope = 2 * P / f * 1000; text = dev + ': 2 × ' + G(P) + ' G × b ÷ (' + fl + ') = ' + fmt(slope) + ' ms × b'; }
+        else if (/^tpot/.test(yKey) && xKey === 'conc') { slope = 2 * P / f * 1000; text = dev + ': 2 × ' + G(P) + ' G × b ÷ (' + fl + ') = ' + fmt(slope) + ' ms × b'; }
       }
       if (y !== null || slope !== null) floors.push({ o: o, y: y, slope: slope, text: text });
     });
     if (!spec) floorNote = ' No specs.json entry for ' + model + ', so no hardware floor.';
-    else if (!floors.length) floorNote = floorKey === 'mem' ? ' The memory-bandwidth floor is drawn for TPOT and TTFT on Y.' : ' The compute floor applies to TTFT and TPOT on Y.';
+    else if (!floors.length) floorNote = floorKey === 'mem' ? ' The memory-bandwidth floor is drawn for TPOT and TTFT on Y.' : ' The compute floor is drawn for TTFT on Y, and for TPOT against concurrency.';
   }
-  // With a floor, Y is read against it: floor ÷ measured, so 100% is the device's peak and every series sits below it
-  // whatever its device (a line at the raw floor would hug the axis next to measured values 2-20x larger).
-  const floorOn = floors.length > 0, floorOf = (r) => floors.filter((f) => f.o.r.id === r.id)[0];
-  const utilLabel = floorKey === 'mem' ? 'Memory bandwidth used · % of peak' : 'FP8 compute used · % of peak';
-  if (floorOn) {
-    const base = my;
-    my = { label: () => utilLabel, title: utilLabel, f: (p, r) => { const fl = floorOf(r), raw = base.f(p, r); return fl && raw > 0 ? (fl.y !== null ? fl.y : fl.slope * p.conc) / raw * 100 : null; } };
-  }
-  const mx = AXES[xKey];
-  // Failed points stay off the chart (the batch tables grey them).
-  let xmax = 0, ymax = 0;
-  const plotted = visible.map((o) => {
-    const vals = [];
-    o.pts.forEach((p) => {
-      const x = p.ok ? mx.f(p, o.r) : null, y = p.ok ? my.f(p, o.r) : null;
-      if (x === null || y === null || !isFinite(x) || !isFinite(y)) return;
-      xmax = Math.max(xmax, x); ymax = Math.max(ymax, y);
-      vals.push({ p: p, x: x, y: y });
-    });
-    return { o: o, vals: vals };
-  });
+  floors.forEach((f) => { if (f.y !== null) ymax = Math.max(ymax, f.y); });
   const sloOnX = xKey === 'tps_user';  // the SLO is a TPS/user, so it only means something on that axis
   const rngdG = plotted.filter((g) => family(g.o.r.hw) === 'rngd')[0], gpuGs = plotted.filter((g) => family(g.o.r.hw) !== 'rngd');
   const vsG = gpuGs.filter((g) => g.o.r.id === st.vs)[0];  // none picked (the default): no arrow
-  const showVs = sloOnX && (!!HIGHER_IS_BETTER[yKey] || floorOn) && !!rngdG && gpuGs.length > 0;
+  const showVs = sloOnX && !!HIGHER_IS_BETTER[yKey] && !!rngdG && gpuGs.length > 0;
   // The SLO is shown (input and line) only when something reads it: the RNGD-vs multiplier or the rack chart.
   const sloUsed = (showVs && !!vsG) || showRack;
   if (sloOnX && sloUsed) xmax = Math.max(xmax, slo);
-  if (floorOn) ymax = Math.max(ymax, 100);
   const xt = niceTicks(xmax * 1.02), yt = niceTicks(ymax * 1.05);
   const px = (x) => L + x / xt.top * (R - L), py = (y) => B - y / yt.top * (B - T);
 
@@ -363,15 +355,18 @@ PAGES.explorer = async function (st) {
   svg += '<text class="axis-title" transform="translate(14 ' + (T + B) / 2 + ') rotate(-90)" text-anchor="middle">' + esc(axisTitle(my)) + '</text>';
   if (sloOnX && sloUsed) svg += '<line x1="' + px(slo) + '" x2="' + px(slo) + '" y1="' + T + '" y2="' + B + '" stroke="var(--faint)" stroke-dasharray="2 4"/><text x="' + (px(slo) + 6) + '" y="' + (B - 8) + '">SLO ' + slo + '</text>';
 
-  // The hardware peak: the 100% line every series is read against.
-  if (floorOn) svg += '<line x1="' + L + '" x2="' + R + '" y1="' + py(100) + '" y2="' + py(100) + '" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="8 5"/>'
-    + '<text class="conc" x="' + (R - 4) + '" y="' + (py(100) - 5) + '" text-anchor="end" style="fill:var(--muted)">100% = ' + (floorKey === 'mem' ? 'peak bandwidth' : 'peak FP8 compute') + '</text>';
+  // Hardware floors: dashed in the series' colour, flat (one value) or rising with the batch (compute floor of TPOT).
+  floors.forEach((f, i) => {
+    const y0 = f.y !== null ? f.y : 0, y1 = f.y !== null ? f.y : f.slope * xt.top;
+    svg += '<line x1="' + L + '" y1="' + py(Math.min(y0, yt.top)) + '" x2="' + R + '" y2="' + py(Math.min(y1, yt.top)) + '" stroke="' + f.o.color + '" stroke-width="1.5" stroke-dasharray="8 5" opacity="0.85"><title>' + esc(f.text) + '</title></line>'
+      + (i ? '' : '<text class="conc" x="' + (R - 4) + '" y="' + (py(Math.min(y1, yt.top)) - 5) + '" text-anchor="end" style="fill:var(--muted)">' + (floorKey === 'mem' ? 'memory floor' : 'compute floor') + '</text>');
+  });
   // Curves are named in the legend above the chart; every measured point carries its batch size (b = concurrency).
   plotted.forEach((g) => {
     if (g.vals.length > 1) svg += '<path d="' + smoothPath(g.vals.map((v) => ({ x: px(v.x), y: py(v.y) }))) + '" fill="none" stroke="' + g.o.color + '" stroke-width="2.5" stroke-dasharray="' + g.o.dash + '"/>';
     g.vals.forEach((v) => {
       const p = v.p, tip = g.o.label + ' · b' + p.conc + '\nTPS/User ' + fmt(p.out / p.conc) + '\n' + perServer('Output TPS') + ' ' + fmt(scaled(p.out, g.o.r)) + '\n' + perServer('Total TPS') + ' ' + fmt(scaled(p.total, g.o.r))
-        + '\nTPOT p50 ' + fmt(p.tpot50) + ' ms\nTTFT p50 ' + fmt(p.ttft50) + ' s' + (yKey === 'custom' ? '\n' + fname + ' ' + fmt(v.y) : '') + (floorOn ? '\n' + utilLabel + ' ' + fmt(v.y) + '%' : '');
+        + '\nTPOT p50 ' + fmt(p.tpot50) + ' ms\nTTFT p50 ' + fmt(p.ttft50) + ' s' + (yKey === 'custom' ? '\n' + fname + ' ' + fmt(v.y) : '');
       svg += '<circle cx="' + px(v.x) + '" cy="' + py(v.y) + '" r="3.5" fill="' + g.o.color + '" stroke="var(--panel)" stroke-width="1.5"><title>' + esc(tip) + '</title></circle>';
       svg += '<text class="conc" x="' + (px(v.x) + 6) + '" y="' + (py(v.y) - 8) + '" style="fill:' + g.o.color + '">b' + p.conc + '</text>';
     });
@@ -423,7 +418,7 @@ PAGES.explorer = async function (st) {
   const kwText = [...new Set(visible.map((o) => family(o.r.hw)))].filter((f) => SERVER_KW[f]).map((f) => FAMILY_NAME[f] + ' ' + familyKw(f) + ' kW').join(', ');
   // Shown: what changes how the numbers read. Folded: the full description of the chart.
   const floorHead = floorKey === 'mem' ? (/^tpot/.test(yKey) ? 'TPOT ≥ weights ÷ (bandwidth × devices)' : 'TTFT ≥ weights ÷ (bandwidth × devices)') : floorKey === 'compute' ? (/^ttft/.test(yKey) ? 'TTFT ≥ 2 × params × ISL ÷ (FP8 TFLOPS × devices)' : 'TPOT ≥ 2 × params × b ÷ (FP8 TFLOPS × devices)') : '';
-  const floorText = floors.length ? ' 100% = ' + floorHead.replace(/^(TPOT|TTFT) ≥ /, '$1 of ') + ', i.e. ' + floors.map((f) => f.text).join('; ') + '; the curve is that floor ÷ the measured value.' : floorNote;
+  const floorText = floors.length ? ' ' + floorHead + ' — ' + floors.map((f) => f.text).join('; ') + '.' : floorNote;
   const capShort = ((yKey === 'tps_kw' ? '8-card server power: ' + kwText + '.' : '') + (SCALE8 ? ' Scaled to an 8-card server (× 8 ÷ devices).' : '')
     + (yKey === 'custom' ? ' y = ' + formula + '.' : '') + vsMissing + floorText).trim();
   const caption = model + ', ' + shapeLabel(scen) + ' ISL/OSL. ' + visible.map((o) => o.label).join(', ') + '.'
