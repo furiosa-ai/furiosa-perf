@@ -218,3 +218,7 @@ tr.cmd-pick.sel td:first-child { box-shadow: inset 3px 0 0 var(--accent), inset 
 /* Embedding & Rerank grid: a value per length × concurrency, with the ratio or the achieved rate under it */
 .emb-grid td .sub { display: block; font-size: 11px; line-height: 1.3; }
 .emb-grid .fail { color: var(--fail); font-size: 11px; }
+.axis-note { display: grid; gap: 4px; margin: 10px 0 2px; font-size: 13px; color: var(--muted); }
+.axis-note b { color: var(--text); font-weight: 600; }
+.explorer aside .tiles { grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 4px; }
+.explorer aside .tile { padding: 8px 10px; }

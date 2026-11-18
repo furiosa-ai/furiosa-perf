@@ -1,4 +1,4 @@
-// Embedding & Rerank (#embed): one model's runs over every input length and concurrency the presets cover,
+// Embedding & Rerank (Explorer, tasks embedding and rerank): one model's runs over every input length and concurrency the presets cover,
 // one curve per run (device × count × backend version). No output tokens here: throughput is input tokens,
 // texts (embedding) or query-document pairs (rerank) per second, and the latency is the whole request (E2EL).
 'use strict';
@@ -30,12 +30,27 @@ async function embedRuns() {
 const log2 = (v) => Math.log(v) / Math.LN2;
 function fmtLen(v) { return v >= 1024 && v % 1024 === 0 ? v / 1024 + 'K' : String(v); }
 
-PAGES.embed = async function (st) {
+// What each axis measures, in plain words, for the note under the chart.
+const EMBED_X_TEXT = {
+  len: 'tokens in each text (embedding) or in each query + document pair (rerank); the presets step through every length bucket the model supports.',
+  conc: 'requests in flight at once; for the query rows it is also the requests sent per second.',
+};
+function embedYText(key, task) {
+  const unit = task === 'rerank' ? 'query + document pair' : 'text';
+  return {
+    tok: 'input tokens the server ' + (task === 'rerank' ? 'scored' : 'embedded') + ' per second, the indexing speed' + (task === 'rerank' ? ' (the server reports no token usage for /v1/rerank, so this is pairs/s × pair length)' : '') + '.',
+    seq: (task === 'rerank' ? 'query-document pairs scored' : 'texts embedded') + ' per second.',
+    reqps: 'requests completed per second; a request is one ' + (task === 'rerank' ? 'query with its documents' : 'text, or a batch of texts for indexing') + '.',
+    e2el50: 'median time from sending a request to its full response; for the query rows it includes any wait in the server.',
+    e2el99: '99th-percentile time from sending a request to its full response; for the query rows it includes any wait in the server.',
+    duration: 'how long the point ran; the query rows send requests for 30 s, so a longer run means the server fell behind the arrival rate.',
+  }[key] || '';
+}
+
+async function renderEmbed(st, task, asideTop) {
   const runs = await embedRuns();
-  const tasks = Object.keys(EMBED_TASKS).filter((t) => runs.some((r) => r.task === t));
-  if (!tasks.length) return '<div class="status">No embedding or rerank results.</div>';
-  const task = tasks.indexOf(st.etask) >= 0 ? st.etask : tasks[0];
   const tRuns = runs.filter((r) => r.task === task);
+  if (!tRuns.length) return '<div class="status">No ' + task + ' results.</div>';
   const models = [...new Set(tRuns.map((r) => r.model))].sort((a, b) => a.localeCompare(b));
   const model = models.indexOf(st.model) >= 0 ? st.model : models[0];
   const mRuns = tRuns.filter((r) => r.model === model).sort((a, b) => famOrder(a.hw) - famOrder(b.hw) || a.n - b.n || cmpVer(b.ver, a.ver));
@@ -134,7 +149,7 @@ PAGES.embed = async function (st) {
       ? 'Queries: one text per request. Every user sends one request a second (request rate = concurrency), so E2EL includes any wait in the server; when a server cannot keep up, the achieved requests/s fall below the rate (marked in the grid) and the run takes longer than the arrival window.'
       : 'Indexing: ' + batch + ' chunks of ISL tokens per request, sent closed loop (the next batch as soon as one returns) at the given concurrency; input tokens/s is the indexing speed.';
   return '<div class="explorer"><aside class="panel">'
-    + select('Task', 'etask', task, tasks.map((t) => ({ v: t, label: EMBED_TASKS[t] }))) + select('Model', 'model', model, models)
+    + asideTop + select('Model', 'model', model, models)
     + select('Request', 'batch', String(batch), batches.map((b) => ({ v: String(b), label: batchLabel(task, b) })))
     + '<div class="ctl">Hardware · backend' + seriesList + '</div></aside><section>'
     + '<div class="controls">' + select('X axis', 'x', xKey, Object.keys(EMBED_X).map((k) => ({ v: k, label: EMBED_X[k] })))
@@ -143,8 +158,12 @@ PAGES.embed = async function (st) {
     + (!Y.higher ? '<label class="ctl">E2EL limit · s<input type="number" min="0" step="0.1" data-k="eslo" data-num value="' + (slo || '') + '" placeholder="none"></label>' : '') + '</div>'
     + '<div class="panel"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">' + esc(Y.label(task)) + '</h2><div class="muted">' + esc(subtitle) + '</div></div>' + downloads('main') + '</div>' + legend
     + '<div class="chart-wrap"><svg class="chart" data-chart="main" viewBox="0 0 ' + EW + ' ' + EH + '" width="100%" role="img" aria-label="' + esc(Y.label(task) + ' against ' + EMBED_X[xKey] + ' for ' + model) + '">' + svg + '<g class="hover"></g></svg><div class="hover-tip" hidden></div></div>'
-    + note('embed', (visible.length ? visible.map((o) => o.label).join(', ') + '. ' : '') + 'Failed points are left off the curve (greyed in the grid).', how) + '</div>'
+    + '<div class="axis-note"><div><b>X · ' + esc(EMBED_X[xKey]) + '</b> — ' + esc(EMBED_X_TEXT[xKey]) + '</div><div><b>Y · ' + esc(Y.label(task)) + '</b> — ' + esc(embedYText(yKey, task)) + '</div>'
+    + '<div><b>Request · ' + esc(batchLabel(task, batch)) + '</b> — ' + esc(how) + '</div></div>'
+    + note('embed', (visible.length ? visible.map((o) => o.label).join(', ') + '. ' : '') + 'Failed points are left off the curve (greyed in the grid).', '') + '</div>'
     + '<div class="panel batches"><div class="panel-head"><h2 style="font-weight:400;font-size:18px">Every length × concurrency</h2><span class="muted">' + esc(Y.label(task) + ' · ' + batchLabel(task, batch)) + (vsSeries ? ' · × = ' + esc(hwName(tSeries.r.hw) + ' ×' + tSeries.r.n + ' vs ' + hwName(vsSeries.r.hw) + ' ×' + vsSeries.r.n) : '') + '</span></div>'
     + (tItems.length > 1 ? pickTiles('table', tItems, tKey) : '') + (grid || '<div class="empty">No series shown.</div>') + '</div></section></div>';
 };
-PAGES.embed.toggle = PAGES.explorer.toggle;
+// Old links: #embed opens the Explorer on the embedding task.
+PAGES.embed = (st) => PAGES.explorer(Object.assign({}, st, { task: EMBED_TASKS[st.task] ? st.task : 'embedding' }));
+PAGES.embed.toggle = (id, checked) => PAGES.explorer.toggle(id, checked);
