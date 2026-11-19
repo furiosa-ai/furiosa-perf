@@ -32,7 +32,7 @@ PAGES.releases = async function (st) {
   const SORTS = { total: 'Total', latest: 'Latest release', abs: 'Biggest change (±)' };
   const sort = SORTS[st.sort] ? st.sort : 'total';
   const controls = sideGroup('RNGD', select('Devices', 'dev', dev, [{ v: 'all', label: 'All device counts' }].concat(devs.map((n) => ({ v: String(n), label: 'RNGD ×' + n })))))
-    + sideGroup('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] }))) + shapeSelect('scen', scen, scens)
+    + sideGroup('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] }))) + shapeSelect('scen', scen, scens, task)
       + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '') + (M.kw ? serverKwInputs(['rngd']) : ''))
     + sideGroup('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label }))) + select('Sort by', 'sort', sort, Object.keys(SORTS).map((k) => ({ v: k, label: SORTS[k] }))) + showSelect(show, featured));
   const page = (body) => sidePage('Releases', controls, body);
@@ -110,7 +110,7 @@ PAGES.releases = async function (st) {
 
   // Panel heading: the metric in plain words, one line of conditions, the method folded (as on RNGD vs GPU).
   const HEAD = metricText(metric, M, slo, rackKw);
-  const cond = GEN_TASKS[task] + ', ' + shapeLabel(scen) + ' ISL/OSL. ' + (dev === 'all' ? 'Every RNGD device count.' : 'RNGD ×' + dev + '.')
+  const cond = GEN_TASKS[task] + ', ' + shapeLabel(scen, task) + ' ISL/OSL. ' + (dev === 'all' ? 'Every RNGD device count.' : 'RNGD ×' + dev + '.')
     + (M.kw ? ' 8-card server power: RNGD ' + serverKw('RNGD') + ' kW.' : '') + (M.slo ? ' ≥ = lower bound.' : '');
   const how = HEAD[1] + (M.point ? ' Pick a model to see every batch, one bar per release; the multiple above each batch is the latest release over the first that measured the model.'
     : ' Each cell is the value on that release; the small figure is the multiple over the previous release that measured the model (' + (M.higher ? 'higher' : 'lower')

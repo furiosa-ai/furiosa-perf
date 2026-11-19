@@ -67,7 +67,7 @@ PAGES.run = async function (st) {
   }).join('');
   const missing = pts.length - cmds.length;
   const clientPanel = '<section class="panel"><div class="panel-head"><h2>Benchmark</h2><span class="muted">' + esc(run.client || (cmds.length && /bench serve/.test(cmds[0]) ? 'vllm bench serve' : '')) + '</span></div>'
-    + pickTiles('scen', shapes.map((s) => ({ key: s, name: shapeLabel(s), sub: 'ISL / OSL' })), scen)
+    + pickTiles('scen', shapes.map((s) => ({ key: s, name: shapeLabel(s, run.task), sub: shapeParts(s).batch ? 'ISL · request' : 'ISL / OSL' })), scen)
     + (picked ? '<div class="cmd-head"><span class="muted">Full command of b' + picked.conc + ' · ' + esc(scen) + ' — click a batch below to switch</span>' + copyButton(cmdOf(picked)) + '</div><pre class="cmd">' + esc(shellLines(argsOf(cmdOf(picked)))) + '</pre>'
       : '<div class="note">This run did not record its client command; the table shows what the client recorded about each batch instead.</div>')
     + (missing > 0 && cmds.length ? '<div class="note">' + missing + ' of ' + pts.length + ' batches have no recorded command.</div>' : '')

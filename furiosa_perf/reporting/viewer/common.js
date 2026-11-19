@@ -49,18 +49,23 @@ async function loadPoints(runs) {
 }
 
 // A scenario of a fixed-length run: '<isl>/<osl>', or '<isl>/<osl>@<WxH>' when an image is sent with every request.
+// Embedding and rerank scenarios (no output) add what a request carries: '<isl>/0#<texts or documents>'.
 function shapeParts(s) {
-  const [pair, img] = String(s || '0/0').split('@'), [isl, osl] = pair.split('/').map(Number);
-  return { isl: isl, osl: osl, img: img || '' };
+  const [rest, batch] = String(s || '0/0').split('#'), [pair, img] = rest.split('@'), [isl, osl] = pair.split('/').map(Number);
+  return { isl: isl, osl: osl, img: img || '', batch: +batch || 0 };
 }
 // '768/1024 · 512² image' — the image size as the preset names it (square) or WxH.
 function imageLabel(img) { const m = /^(\d+)x(\d+)$/.exec(img || ''); return !m ? img : m[1] === m[2] ? m[1] + '²' : m[1] + '×' + m[2]; }
-function shapeLabel(s) { const x = shapeParts(s); return x.isl + '/' + x.osl + (x.img ? ' · ' + imageLabel(x.img) + ' image' : ''); }
+function shapeLabel(s, task) {
+  const x = shapeParts(s);
+  if (x.batch) return 'ISL ' + x.isl + ' · ' + (task === 'rerank' ? x.batch + ' documents / query' : x.batch === 1 ? '1 text / request' : x.batch + ' texts / request');
+  return x.isl + '/' + x.osl + (x.img ? ' · ' + imageLabel(x.img) + ' image' : '');
+}
 
-// Points of one scenario (ISL/OSL pair and, for image-text, the image), by concurrency.
+// Points of one scenario (ISL/OSL pair and, for image-text, the image; for embedding and rerank, the request size), by concurrency.
 function pointsAt(run, isl, osl, img) {
-  const scen = typeof isl === 'string' ? shapeParts(isl) : { isl: isl, osl: osl, img: img || '' };
-  return (DATA.points[run.id] || []).filter((p) => p.isl === scen.isl && p.osl === scen.osl && (p.image || '') === scen.img).sort((a, b) => a.conc - b.conc);
+  const scen = typeof isl === 'string' ? shapeParts(isl) : { isl: isl, osl: osl, img: img || '', batch: 0 };
+  return (DATA.points[run.id] || []).filter((p) => p.isl === scen.isl && p.osl === scen.osl && (p.image || '') === scen.img && (!scen.batch || p.batch === scen.batch)).sort((a, b) => a.conc - b.conc);
 }
 
 // The newest run of each identical measurement (same platform, layout, task, model and server options).
@@ -78,6 +83,12 @@ async function generationRuns() {
   return latestRuns((await loadIndex()).filter((r) => r.kind === 'baseline' && !r.variant && GEN_TASKS[r.task]));
 }
 const GEN_TASKS = { 'text': 'Text', 'image-text': 'Image + text' };
+// Embedding and rerank runs as configured: no output tokens, so their own metrics (POOL_METRICS).
+const POOL_TASKS = { 'embedding': 'Embedding', 'rerank': 'Rerank' };
+async function poolingRuns() {
+  return latestRuns((await loadIndex()).filter((r) => r.kind === 'baseline' && !r.variant && POOL_TASKS[r.task]));
+}
+function isPooling(task) { return !!POOL_TASKS[task]; }
 // Every task the Explorer shows, in its order: generation first, then the pooling tasks (embed.js).
 const TASK_LABELS = { 'text': 'Text', 'image-text': 'Image + text', 'embedding': 'Embedding', 'rerank': 'Rerank' };
 
@@ -89,12 +100,12 @@ function shapeOptions(runs) {
   // Image-text runs of the preset name their image; older ones (another image, other lengths) only clutter the list
   // once there are preset results, and cannot be compared with them anyway.
   const keys = Object.keys(set), withImage = keys.filter((s) => set[s].img);
-  return (withImage.length ? withImage : keys).sort((a, b) => set[a].isl - set[b].isl || set[a].osl - set[b].osl || imgPx(set[a]) - imgPx(set[b]));
+  return (withImage.length ? withImage : keys).sort((a, b) => set[a].isl - set[b].isl || set[a].osl - set[b].osl || imgPx(set[a]) - imgPx(set[b]) || set[a].batch - set[b].batch);
 }
 function pickShape(want, options) {
-  return options.indexOf(want) >= 0 ? want : options.indexOf('1024/1024') >= 0 ? '1024/1024' : options[0];
+  return options.indexOf(want) >= 0 ? want : options.indexOf('1024/1024') >= 0 ? '1024/1024' : options.indexOf('512/0#1') >= 0 ? '512/0#1' : options.indexOf('512/0#10') >= 0 ? '512/0#10' : options[0];
 }
-function shapeSelect(key, scen, scens) { return select('ISL / OSL', key, scen, scens.map((s) => ({ v: s, label: shapeLabel(s) }))); }
+function shapeSelect(key, scen, scens, task) { return select(shapeParts(scens[0] || '').batch ? 'ISL · request' : 'ISL / OSL', key, scen, scens.map((s) => ({ v: s, label: shapeLabel(s, task) }))); }
 
 // ---- platforms -----------------------------------------------------------------------------------
 function verKey(v) {
@@ -218,6 +229,21 @@ const METRICS = {
   tpot: { label: 'TPOT p50 (ms)', higher: false, f: (pts) => { const p = c1(pts); return p ? { v: p.tpot50 } : null; }, point: { label: 'TPOT p50 (ms)', f: (p) => p.tpot50 } },
   ttft: { label: 'TTFT p50 (s)', higher: false, f: (pts) => { const p = c1(pts); return p ? { v: p.ttft50 } : null; }, point: { label: 'TTFT p50 (s)', f: (p) => p.ttft50 } },
 };
+// Embedding and rerank: input tokens per second (the server reports no usage for /v1/rerank: pairs/s × pair length),
+// documents scored per second, requests per second, and the whole-request latency.
+const poolTps = (p) => (p.total > 0 ? p.total : p.seq > 0 ? p.seq * p.isl : null);
+const peakBy = (pts, f) => okPts(pts).reduce((b, p) => (f(p) > 0 && (!b || f(p) > f(b)) ? p : b), null);
+const POOL_METRICS = {
+  etps: { label: 'Total TPS', higher: true, f: (pts) => { const p = peakBy(pts, poolTps); return p ? { v: poolTps(p) } : null; }, point: { label: 'Total TPS', f: poolTps } },
+  epairs: { label: 'Pairs / s', higher: true, only: 'rerank', f: (pts) => { const p = peakBy(pts, (q) => q.seq); return p ? { v: p.seq } : null; }, point: { label: 'Pairs / s', f: (p) => p.seq } },
+  erps: { label: 'RPS', higher: true, f: (pts) => { const p = peakBy(pts, (q) => q.reqps); return p ? { v: p.reqps } : null; }, point: { label: 'RPS', f: (p) => p.reqps } },
+  e2el: { label: 'E2EL p50 (s)', higher: false, f: (pts) => { const p = c1(pts); return p ? { v: p.e2el50 } : null; }, point: { label: 'E2EL p50 (s)', f: (p) => p.e2el50 } },
+  e2el99: { label: 'E2EL p99 (s)', higher: false, f: (pts) => { const p = c1(pts); return p ? { v: p.e2el99 } : null; }, point: { label: 'E2EL p99 (s)', f: (p) => p.e2el99 } },
+};
+function metricsFor(task) {
+  if (!isPooling(task)) return METRICS;
+  return Object.fromEntries(Object.entries(POOL_METRICS).filter(([k, m]) => !m.only || m.only === task));
+}
 // What an SLO metric was measured against, for titles: '' for the others.
 function metricBasis(M, slo, rackKw) { return (M.slo ? ' · SLO ' + slo + ' TPS/user' : '') + (M.rack ? ' · ' + rackKw + ' kW rack' : ''); }
 
@@ -392,6 +418,11 @@ function moreButton(shown, total, show) {
 function metricText(metric, M, slo, rackKw) {
   const atSlo = 'every user at ≥ ' + slo + ' tok/s';
   return {
+    etps: ['Input throughput', 'Input tokens/s at the best concurrency; there are no output tokens.'],
+    epairs: ['Documents scored per second', 'Query-document pairs/s at the best concurrency.'],
+    erps: ['Requests per second', 'Requests completed per second at the best concurrency.'],
+    e2el: ['Request latency', 'Median time from request to full response at concurrency 1, lower is better.'],
+    e2el99: ['Request latency, p99', '99th-percentile time from request to full response at concurrency 1, lower is better.'],
     tpkw: ['Throughput per kW, ' + atSlo, 'Output tokens/s per kW of an 8-card server, read at the batch where each user still gets ' + slo + ' tok/s.'],
     rack: ['Users per ' + rackKw + ' kW rack, ' + atSlo, 'Whole 8-card servers that fit in the rack × users per server at the SLO (servers rounded down).'],
     users: ['Users per 8-card server, ' + atSlo, 'Most concurrent users still at ≥ ' + slo + ' tok/s, scaled to 8 cards (× 8 ÷ devices measured).'],
@@ -414,7 +445,7 @@ function batchRatio(M, scen, a, b) {
   return logs.length ? Math.exp(logs.reduce((s, v) => s + v, 0) / logs.length) : null;
 }
 // Single-value read of a point metric: at the peak for throughputs, at batch 1 for per-user speed and latency.
-function pointRead(metric) { return ['tpu', 'tpot', 'ttft'].indexOf(metric) >= 0 ? 'batch 1' : 'the peak'; }
+function pointRead(metric) { return ['tpu', 'tpot', 'ttft', 'e2el', 'e2el99'].indexOf(metric) >= 0 ? 'batch 1' : 'the peak'; }
 
 // One-of-many picker drawn as tiles (radio buttons bound to state[key], so the pick is kept in the link).
 // items: [{ key, name, sub }]; returns the picked key (state[key] if it is one of the items, else dflt).

@@ -234,14 +234,17 @@ def _columns(points: list[dict[str, Any]]) -> dict[str, list[Any]]:
 
 def _shapes(points: list[dict[str, Any]]) -> list[str]:
     """The ISL/OSL pairs a run measured, ``<isl>/<osl>``; image-text points add their image, ``<isl>/<osl>@<WxH>``,
-    so the three image sizes of the preset stay three scenarios (the viewer splits on ``@``)."""
+    so the three image sizes of the preset stay three scenarios, and embedding and rerank points their request size,
+    ``<isl>/0#<texts or documents>`` (the viewer splits on ``@`` and ``#``)."""
     shapes = set()
     for p in points:
         if "Input Tokens" not in p or "Output Tokens" not in p:
             continue
         image = p.get("Image")
-        shapes.add((p["Input Tokens"], p["Output Tokens"], str(image) if image else ""))
-    return [f"{i}/{o}" + (f"@{img}" if img else "") for i, o, img in sorted(shapes)]
+        # Embedding and rerank points (no output) differ by what a request carries: texts, or documents per query.
+        batch = p.get("Inputs per Request") if not p["Output Tokens"] and p.get("Inputs per Request") else 0
+        shapes.add((p["Input Tokens"], p["Output Tokens"], str(image) if image else "", batch))
+    return [f"{i}/{o}" + (f"@{img}" if img else "") + (f"#{b}" if b else "") for i, o, img, b in sorted(shapes)]
 
 
 def _failed(point: dict[str, Any]) -> bool:

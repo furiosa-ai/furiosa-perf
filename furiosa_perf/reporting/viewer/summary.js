@@ -2,10 +2,12 @@
 'use strict';
 
 PAGES.summary = async function (st) {
-  const all = await generationRuns();
-  const tasks = Object.keys(GEN_TASKS).filter((t) => all.some((r) => r.task === t));
+  const all = (await generationRuns()).concat(await poolingRuns());
+  const TASKS = Object.assign({}, GEN_TASKS, POOL_TASKS);
+  const tasks = Object.keys(TASKS).filter((t) => all.some((r) => r.task === t));
   const task = tasks.indexOf(st.task) >= 0 ? st.task : tasks[0];
   const tRuns = all.filter((r) => r.task === task);
+  const METRICS = metricsFor(task);  // generation metrics, or the embedding / rerank ones
   const scens = shapeOptions(tRuns);
   const scen = pickShape(st.scen, scens);
   const slo = st.slo > 0 ? st.slo : 20, rackKw = +st.rack > 0 ? +st.rack : RACK_KW;
@@ -31,9 +33,9 @@ PAGES.summary = async function (st) {
   const counts = [...new Set(tRuns.map((r) => r.n))].sort((a, b) => a - b);
   const dev = counts.indexOf(+st.dev) >= 0 ? +st.dev : st.dev === 'best' ? 'best' : 'match';
   // How many models to show (best ratio first), so a meeting can stop at the strong ones.
-  const featured = featuredFor((plats[rngd] || {}).ver);
+  const featured = isPooling(task) ? [] : featuredFor((plats[rngd] || {}).ver);  // the featured list names generation models
   const show = showOf(st, featured);
-  const metric = METRICS[st.metric] ? st.metric : 'tpkw';
+  const metric = METRICS[st.metric] ? st.metric : isPooling(task) ? (task === 'rerank' ? 'epairs' : 'etps') : 'tpkw';
   const M = METRICS[metric];
 
   const opt = (k) => ({ v: k, label: platformLabel(k) });
@@ -41,9 +43,9 @@ PAGES.summary = async function (st) {
   const controls = ''
     + sideGroup('Compare', select('RNGD', 'rngd', rngd, rngdKeys.map(opt))
     + select('Compare with', 'gpu', gpu, gpuOpts.map((k) => (k.indexOf('hw:') === 0 ? { v: k, label: k.slice(3) + ' · newest per model' } : opt(k))))
-    + select('Devices', 'dev', String(dev), [{ v: 'match', label: 'Same as RNGD' }, { v: 'best', label: 'Best per side · TPS/kW' }].concat(counts.map((n) => ({ v: String(n), label: '×' + n + ' both sides' })))))
-    + sideGroup('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: GEN_TASKS[t] })))
-      + shapeSelect('scen', scen, scens) + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '')
+    + select('Devices', 'dev', String(dev), [{ v: 'match', label: 'Same as RNGD' }].concat(isPooling(task) ? [] : [{ v: 'best', label: 'Best per side · TPS/kW' }]).concat(counts.map((n) => ({ v: String(n), label: '×' + n + ' both sides' })))))
+    + sideGroup('Scenario', select('Task', 'task', task, tasks.map((t) => ({ v: t, label: TASKS[t] })))
+      + shapeSelect('scen', scen, scens, task) + (M.slo ? sloInput(slo) : '') + (M.rack ? rackInput(rackKw) : '')
       + (M.kw ? serverKwInputs(['rngd', family(gpuHw || (plats[gpu] || {}).hw || '')]) : ''))
     + sideGroup('View', select('Metric', 'metric', metric, Object.keys(METRICS).map((k) => ({ v: k, label: METRICS[k].label })))
       + showSelect(show, featured));
@@ -70,7 +72,7 @@ PAGES.summary = async function (st) {
       pickN[m] = { r: rn, g: gn };
     } else if (dev === 'best') {
       const by = (side) => sel.filter((r) => r.model === m && sideOf(r) === side)
-        .map((r) => ({ n: r.n, v: (METRICS.tpkw.f(pointsAt(r, scen), r, slo) || { v: -1 }).v }))
+        .map((r) => ({ n: r.n, v: ((METRICS.tpkw || M).f(pointsAt(r, scen), r, slo) || { v: -1 }).v }))
         .sort((a, b) => b.v - a.v || a.n - b.n)[0];
       pickN[m] = { r: (by('r') || {}).n, g: (by('g') || {}).n };
     } else pickN[m] = { r: dev, g: dev };
@@ -133,7 +135,7 @@ PAGES.summary = async function (st) {
   const bound = M.slo ? ' ≥: still above ' + slo + ' tok/s per user at the largest batch measured.' : '';
   const HEAD = metricText(metric, M, slo, rackKw);
   if (M.point) HEAD[1] += ' Ranked at ' + pointRead(metric) + '; pick a model to see every batch.';
-  const headSub = GEN_TASKS[task] + ', ' + shapeLabel(scen) + ' ISL/OSL.' + servers + devices + (M.slo ? ' ≥ = lower bound.' : '');
+  const headSub = TASKS[task] + ', ' + shapeLabel(scen, task) + (isPooling(task) ? '.' : ' ISL/OSL.') + servers + devices + (M.slo ? ' ≥ = lower bound.' : '');
   // Fixed title: what is compared lives in the controls, and in the panel heading and legend below.
   return page(''
     + '<section class="panel"><div class="panel-head"><div><h2>' + esc(HEAD[0]) + '</h2><div class="panel-sub">' + note('summary', headSub, HEAD[1] + bound) + '</div></div><div class="legend">'

@@ -307,9 +307,16 @@ PAGES.explorer = async function (st) {
     },
   };
   const mx = AXES[xKey];
+  // Image + text: the same server's text-only run at the same ISL/OSL, dotted beside each series, shows what the image costs.
+  const overlay = task === 'image-text' && st.overlay !== 'off';
+  const textRunOf = (r) => gen.filter((t) => t.task === 'text' && t.model === r.model && t.hw === r.hw && t.n === r.n && t.layout === r.layout && t.backend === r.backend && t.ver === r.ver)[0];
+  const overlays = overlay ? visible.map((o) => ({ o: o, r: textRunOf(o.r) })).filter((x) => x.r) : [];
+  await loadPoints(overlays.map((x) => x.r));
+  overlays.forEach((x) => { x.pts = pointsAt(x.r, isl, osl, ''); });
+  const withOverlay = visible.concat(overlays.filter((x) => x.pts.length).map((x) => ({ r: x.r, pts: x.pts, label: x.o.label + ' · text only', color: x.o.color, dash: '1 4', textOnly: true })));
   // Failed points stay off the chart (the batch tables grey them).
   let xmax = 0, ymax = 0;
-  const plotted = visible.map((o) => {
+  const plotted = withOverlay.map((o) => {
     const vals = [];
     o.pts.forEach((p) => {
       const x = p.ok ? mx.f(p, o.r) : null, y = p.ok ? my.f(p, o.r) : null;
@@ -320,7 +327,7 @@ PAGES.explorer = async function (st) {
     return { o: o, vals: vals };
   });
   const sloOnX = xKey === 'tps_user';  // the SLO is a TPS/user, so it only means something on that axis
-  const rngdG = plotted.filter((g) => family(g.o.r.hw) === 'rngd')[0], gpuGs = plotted.filter((g) => family(g.o.r.hw) !== 'rngd');
+  const rngdG = plotted.filter((g) => !g.o.textOnly && family(g.o.r.hw) === 'rngd')[0], gpuGs = plotted.filter((g) => !g.o.textOnly && family(g.o.r.hw) !== 'rngd');
   const vsG = gpuGs.filter((g) => g.o.r.id === st.vs)[0];  // none picked (the default): no arrow
   const showVs = sloOnX && !!HIGHER_IS_BETTER[yKey] && !!rngdG && gpuGs.length > 0;
   // The SLO is shown (input and line) only when something reads it: the RNGD-vs multiplier or the rack chart.
@@ -343,8 +350,9 @@ PAGES.explorer = async function (st) {
 
   // Curves are named in the legend above the chart; every measured point carries its batch size (b = concurrency).
   plotted.forEach((g) => {
-    if (g.vals.length > 1) svg += '<path d="' + smoothPath(g.vals.map((v) => ({ x: px(v.x), y: py(v.y) }))) + '" fill="none" stroke="' + g.o.color + '" stroke-width="2.5" stroke-dasharray="' + g.o.dash + '"/>';
+    if (g.vals.length > 1) svg += '<path d="' + smoothPath(g.vals.map((v) => ({ x: px(v.x), y: py(v.y) }))) + '" fill="none" stroke="' + g.o.color + '" stroke-width="' + (g.o.textOnly ? 1.5 : 2.5) + '" stroke-dasharray="' + g.o.dash + '"' + (g.o.textOnly ? ' opacity="0.7"' : '') + '/>';
     g.vals.forEach((v) => {
+      if (g.o.textOnly) { svg += '<circle cx="' + px(v.x) + '" cy="' + py(v.y) + '" r="2.5" fill="var(--panel)" stroke="' + g.o.color + '" stroke-width="1.5"><title>' + esc(g.o.label + ' · b' + v.p.conc + ' · ' + fmt(v.y)) + '</title></circle>'; return; }
       const p = v.p, tip = g.o.label + ' · b' + p.conc + '\nTPS/User ' + fmt(p.out / p.conc) + '\n' + perServer('Output TPS') + ' ' + fmt(scaled(p.out, g.o.r)) + '\n' + perServer('Total TPS') + ' ' + fmt(scaled(p.total, g.o.r))
         + '\nTPOT p50 ' + fmt(p.tpot50) + ' ms\nTTFT p50 ' + fmt(p.ttft50) + ' s' + (yKey === 'custom' ? '\n' + fname + ' ' + fmt(v.y) : '');
       svg += '<circle cx="' + px(v.x) + '" cy="' + py(v.y) + '" r="3.5" fill="' + g.o.color + '" stroke="var(--panel)" stroke-width="1.5"><title>' + esc(tip) + '</title></circle>';
@@ -385,7 +393,7 @@ PAGES.explorer = async function (st) {
     + '<div class="scroll"><table class="list"><thead><tr><th class="num">Batch</th>' + colHead + '</tr></thead><tbody>' + tRows + '</tbody></table></div></div>';
   HOVER = {
     xtop: xt.top, ytop: yt.top, py: py, xLabel: mx.label(), yLabel: my.label(),
-    curves: plotted.map((g) => ({ label: hwName(g.o.r.hw) + ' ×' + g.o.r.n + ' · ' + g.o.r.ver, color: g.o.color, vals: g.vals })).filter((c) => c.vals.length),
+    curves: plotted.map((g) => ({ label: hwName(g.o.r.hw) + ' ×' + g.o.r.n + ' · ' + g.o.r.ver + (g.o.textOnly ? ' · text only' : ''), color: g.o.color, vals: g.vals })).filter((c) => c.vals.length),
   };
 
   const seriesList = all.map((o) => '<label class="series"><input type="checkbox" data-toggle="' + esc(o.r.id) + '"' + (o.on ? ' checked' : '') + '>'
@@ -394,10 +402,12 @@ PAGES.explorer = async function (st) {
   // Each legend entry opens how that run was measured (run.js).
   const legend = '<div class="legend chart-legend">' + visible.map((o) => '<a class="run-link" title="How this run was measured" href="#run?id=' + encodeURIComponent(o.r.id) + '&scen=' + encodeURIComponent(scen) + '"><svg width="22" height="10" aria-hidden="true"><line x1="1" y1="5" x2="21" y2="5" stroke="' + o.color
     + '" stroke-width="3" stroke-linecap="round" stroke-dasharray="' + o.dash + '"/></svg><b>' + esc(hwName(o.r.hw) + ' ×' + o.r.n + (o.r.layout ? ' ' + o.r.layout : ''))
-    + '</b><span class="mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver) + '</span><span class="faint">↗</span></a>').join('') + '</div>';
+    + '</b><span class="mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver) + '</span><span class="faint">↗</span></a>').join('')
+    + (overlays.some((x) => x.pts.length) ? '<span class="faint"><svg width="22" height="10" aria-hidden="true"><line x1="1" y1="5" x2="21" y2="5" stroke="var(--muted)" stroke-width="2" stroke-dasharray="1 4"/></svg> dotted = the same server, text only, ' + isl + '/' + osl + '</span>' : '') + '</div>';
   const kwText = [...new Set(visible.map((o) => family(o.r.hw)))].filter((f) => SERVER_KW[f]).map((f) => FAMILY_NAME[f] + ' ' + familyKw(f) + ' kW').join(', ');
   // Shown: what changes how the numbers read. Folded: the full description of the chart.
-  const capShort = ((yKey === 'tps_kw' ? '8-card server power: ' + kwText + '.' : '') + (SCALE8 ? ' Scaled to an 8-card server (× 8 ÷ devices).' : '')
+  const overlayNote = !overlay ? '' : overlays.some((x) => x.pts.length) ? ' Dotted: the same server serving text only at ' + isl + '/' + osl + ' (no image).' : ' No text-only run at ' + isl + '/' + osl + ' for these servers to overlay.';
+  const capShort = ((yKey === 'tps_kw' ? '8-card server power: ' + kwText + '.' : '') + (SCALE8 ? ' Scaled to an 8-card server (× 8 ÷ devices).' : '') + overlayNote
     + (yKey === 'custom' ? ' y = ' + formula + '.' : '') + vsMissing).trim();
   const caption = model + ', ' + shapeLabel(scen) + ' ISL/OSL. ' + visible.map((o) => o.label).join(', ') + '.'
     + (yKey === 'tps_kw' ? ' Per-device throughput scaled to 8-card server power: ' + kwText + '.' : '')
@@ -466,6 +476,7 @@ PAGES.explorer = async function (st) {
     + (showVs ? select('× RNGD vs', 'vs', vsG ? vsG.o.r.id : 'none', [{ v: 'none', label: 'None' }].concat(gpuGs.map((g) => ({ v: g.o.r.id, label: g.o.label })))) : '')
     + select('Rack capacity', 'rackview', showRack ? 'show' : 'hide', [{ v: 'hide', label: 'Hide' }, { v: 'show', label: 'Show' }])
     + select('Y scale', 'yscale', logY ? 'log' : 'linear', [{ v: 'linear', label: 'Linear' }, { v: 'log', label: 'Log' }])
+    + (task === 'image-text' ? select('Text-only run', 'overlay', overlay ? 'on' : 'off', [{ v: 'on', label: 'Overlay' }, { v: 'off', label: 'Hide' }]) : '')
     // Server power of each device family on the chart, when a number depends on it (TPS per kW, rack).
     + (yKey === 'tps_kw' || showRack ? serverKwInputs([...new Set(visible.map((o) => family(o.r.hw)))].sort((a, b) => FAMILY_ORDER[a] - FAMILY_ORDER[b])) : '') + '</div>'
     + '<div class="panel' + (showRack ? ' joined' : '') + '"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">' + esc(my.title || my.label()) + (showRack ? ' <span class="faint">→</span> Users per rack' : '') + '</h2><div class="muted">' + esc(scenText) + ' · ' + esc(GEN_TASKS[task].toLowerCase()) + '</div></div>'
