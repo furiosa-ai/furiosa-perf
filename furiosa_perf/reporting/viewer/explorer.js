@@ -262,7 +262,16 @@ PAGES.explorer = async function (st) {
   const { isl, osl, img } = shapeParts(scen), scenText = 'ISL ' + isl + ' / OSL ' + osl + (img ? ' · ' + imageLabel(img) + ' image' : '');
 
   await loadPoints(tRuns);
-  const all = tRuns.map((r) => ({ r: r, pts: pointsAt(r, scen), label: seriesLabel(r) + (r.variant ? ' · ' + variantShort(r.variant) : '') }))
+  // Image + text: the image tokens each server actually prepended, from its prompt-token counter (tokens per request
+  // − the text ISL); gemma-4 resamples every image to its max_soft_tokens budget, so the figure is what a variant changes.
+  const imageTokens = (pts) => {
+    const xs = pts.filter((p) => p.ok && p.raw.server_prompt_tps > 0 && p.raw.active_s > 0 && p.raw.completed > 0).map((p) => p.raw.server_prompt_tps * p.raw.active_s / p.raw.completed - p.isl);
+    return xs.length ? Math.round(median(xs)) : null;
+  };
+  const all = tRuns.map((r) => {
+    const pts = pointsAt(r, scen), imgTok = task === 'image-text' ? imageTokens(pts) : null;
+    return { r: r, pts: pts, imgTok: imgTok, label: seriesLabel(r) + (r.variant ? ' · ' + variantShort(r.variant) : '') + (imgTok !== null ? ' · ' + imgTok + ' image tokens' : '') };
+  })
     .filter((o) => o.pts.length)
     .sort((a, b) => famOrder(a.r.hw) - famOrder(b.r.hw) || a.r.n - b.r.n || cmpVer(b.r.ver, a.r.ver));
   // The newest version measured here gets the strong colour, older ones the light one.
@@ -319,11 +328,7 @@ PAGES.explorer = async function (st) {
   const overlayMode = ['total', 'text', 'off'].indexOf(st.overlay) >= 0 ? st.overlay : 'total';
   const overlay = task === 'image-text' && overlayMode !== 'off';
   const textRunOf = (r) => gen.filter((t) => t.task === 'text' && t.model === r.model && t.hw === r.hw && t.n === r.n && t.layout === r.layout && t.backend === r.backend && t.ver === r.ver)[0];
-  const imageTokens = (pts) => {
-    const xs = pts.filter((p) => p.ok && p.raw.server_prompt_tps > 0 && p.raw.active_s > 0 && p.raw.completed > 0).map((p) => p.raw.server_prompt_tps * p.raw.active_s / p.raw.completed - p.isl);
-    return xs.length ? Math.round(median(xs)) : null;
-  };
-  const overlays = overlay ? visible.map((o) => ({ o: o, r: textRunOf(o.r), imgTok: imageTokens(o.pts) })).filter((x) => x.r) : [];
+  const overlays = overlay ? visible.map((o) => ({ o: o, r: textRunOf(o.r), imgTok: o.imgTok })).filter((x) => x.r) : [];
   await loadPoints(overlays.map((x) => x.r));
   overlays.forEach((x) => {
     // The text scenario: the same OSL at the ISL nearest the target (the text preset steps 512, 1024, 2048, 7168, …).
@@ -377,7 +382,7 @@ PAGES.explorer = async function (st) {
       if (g.o.textOnly) { svg += '<circle cx="' + px(v.x) + '" cy="' + py(v.y) + '" r="2.5" fill="var(--panel)" stroke="' + g.o.color + '" stroke-width="1.5"><title>' + esc(g.o.label + ' · b' + v.p.conc + ' · ' + fmt(v.y)) + '</title></circle>'; return; }
       const p = v.p, tip = g.o.label + ' · b' + p.conc + '\nTPS/User ' + fmt(p.out / p.conc) + '\n' + perServer('Output TPS') + ' ' + fmt(scaled(p.out, g.o.r)) + '\n' + perServer('Total TPS') + ' ' + fmt(scaled(p.total, g.o.r))
         + '\nTPOT p50 ' + fmt(p.tpot50) + ' ms\nTTFT p50 ' + fmt(p.ttft50) + ' s' + (yKey === 'custom' ? '\n' + fname + ' ' + fmt(v.y) : '');
-      svg += '<circle cx="' + px(v.x) + '" cy="' + py(v.y) + '" r="3.5" fill="' + g.o.color + '" stroke="var(--panel)" stroke-width="1.5"><title>' + esc(tip) + '</title></circle>';
+      svg += '<circle cx="' + px(v.x) + '" cy="' + py(v.y) + '" r="' + (g.vals.length > 1 ? 3.5 : 6) + '" fill="' + (g.vals.length > 1 ? g.o.color : 'none') + '" stroke="' + (g.vals.length > 1 ? 'var(--panel)' : g.o.color) + '" stroke-width="' + (g.vals.length > 1 ? 1.5 : 2.5) + '"><title>' + esc(tip) + '</title></circle>';  // a lone point: a ring, so it shows over another series
       svg += '<text class="conc" x="' + (px(v.x) + 6) + '" y="' + (py(v.y) - 8) + '" style="fill:' + g.o.color + '">b' + p.conc + '</text>';
     });
   });
@@ -424,7 +429,7 @@ PAGES.explorer = async function (st) {
   // Each legend entry opens how that run was measured (run.js).
   const legend = '<div class="legend chart-legend">' + visible.map((o) => '<a class="run-link" title="How this run was measured" href="#run?id=' + encodeURIComponent(o.r.id) + '&scen=' + encodeURIComponent(scen) + '"><svg width="22" height="10" aria-hidden="true"><line x1="1" y1="5" x2="21" y2="5" stroke="' + o.color
     + '" stroke-width="3" stroke-linecap="round" stroke-dasharray="' + o.dash + '"/></svg><b>' + esc(hwName(o.r.hw) + ' ×' + o.r.n + (o.r.layout ? ' ' + o.r.layout : ''))
-    + '</b><span class="mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver + (o.r.variant ? ' · ' + variantShort(o.r.variant) : '')) + '</span><span class="faint">↗</span></a>').join('')
+    + '</b><span class="mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver + (o.r.variant ? ' · ' + variantShort(o.r.variant) : '') + (o.imgTok !== null && o.imgTok !== undefined ? ' · ' + o.imgTok + ' image tok' : '')) + '</span><span class="faint">↗</span></a>').join('')
     + overlays.filter((x) => x.pts.length).map((x) => '<span class="faint"><svg width="22" height="10" aria-hidden="true"><line x1="1" y1="5" x2="21" y2="5" stroke="' + x.o.color + '" stroke-width="2" stroke-dasharray="1 4"/></svg>' + esc(x.name.replace(x.o.label + ' · ', '')) + '</span>').join('') + '</div>';
   const kwText = [...new Set(visible.map((o) => family(o.r.hw)))].filter((f) => SERVER_KW[f]).map((f) => FAMILY_NAME[f] + ' ' + familyKw(f) + ' kW').join(', ');
   // Shown: what changes how the numbers read. Folded: the full description of the chart.
