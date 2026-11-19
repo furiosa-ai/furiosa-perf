@@ -30,6 +30,8 @@ const W = 900, H = 490, L = 70, R = 880, T = 20, B = 440;  // chart viewBox and 
 // device counts), each GPU its own hue.
 const HUES = [[/RNGD/, 'red'], [/H100/, 'lilac'], [/H200/, 'blue'], [/RTX/, 'green']];
 function hueOf(hw) { const h = HUES.find(([re]) => re.test(hw)); return h ? h[1] : 'yellow'; }
+// 'mm-processor-kwargs={"image": {"max_soft_tokens": 1024}}' -> 'max_soft_tokens=1024'
+function variantShort(v) { return String(v).replace(/^mm-processor-kwargs=/, '').replace(/[{}"]/g, '').replace(/^\w+: /, '').replace(/: /g, '=').replace(/, /g, ' '); }
 function hwName(hw) { const f = family(hw); return (f === 'rngd' ? 'FURIOSA ' : f === 'other' ? '' : 'NVIDIA ') + hw.replace(/-/g, ' '); }
 
 // ---- custom Y formula ----------------------------------------------------------------------------
@@ -244,7 +246,10 @@ PAGES.explorer = async function (st) {
   const models = [...new Set(tAll.map((r) => r.model))].sort((a, b) => a.localeCompare(b));
   // Default model: the first featured one measured (featured.json), else the first by name.
   const model = models.indexOf(st.model) >= 0 ? st.model : featuredFor(null).filter((m) => models.indexOf(m) >= 0)[0] || models[0];
-  const tRuns = tAll.filter((r) => r.model === model);
+  // The model's runs as configured, plus any run of it with server options changed (--server-arg, e.g. gemma-4 with
+  // another image token budget): drawn as a series of its own, off until picked.
+  const vRuns = latestRuns((await loadIndex()).filter((r) => r.kind === 'baseline' && r.variant && r.task === task && r.model === model));
+  const tRuns = tAll.filter((r) => r.model === model).concat(vRuns);
   const scens = shapeOptions(tRuns);
   const scen = pickShape(st.scen, scens);
   const xKey = X_KEYS.indexOf(st.x) >= 0 ? st.x : 'tps_user', yKey = Y_KEYS.indexOf(st.y) >= 0 ? st.y : 'tps_kw';
@@ -257,7 +262,7 @@ PAGES.explorer = async function (st) {
   const { isl, osl, img } = shapeParts(scen), scenText = 'ISL ' + isl + ' / OSL ' + osl + (img ? ' · ' + imageLabel(img) + ' image' : '');
 
   await loadPoints(tRuns);
-  const all = tRuns.map((r) => ({ r: r, pts: pointsAt(r, scen), label: seriesLabel(r) }))
+  const all = tRuns.map((r) => ({ r: r, pts: pointsAt(r, scen), label: seriesLabel(r) + (r.variant ? ' · ' + variantShort(r.variant) : '') }))
     .filter((o) => o.pts.length)
     .sort((a, b) => famOrder(a.r.hw) - famOrder(b.r.hw) || a.r.n - b.r.n || cmpVer(b.r.ver, a.r.ver));
   // The newest version measured here gets the strong colour, older ones the light one.
@@ -271,8 +276,8 @@ PAGES.explorer = async function (st) {
     const vers = uniq(same.map((x) => x.r.ver)).sort((a, b) => cmpVer(b, a)), ns = uniq(same.map((x) => x.r.n)).sort((a, b) => a - b);
     const rngd = family(o.r.hw) === 'rngd', rank = ns.indexOf(o.r.n), shade = rngd ? Math.max(0, rank - 1) : rank;
     const base = 'var(--c-' + (rngd && rank ? 'orange' : hueOf(o.r.hw)) + '-' + Math.min(3, vers.indexOf(o.r.ver)) + ')';
-    o.dash = ['none', '6 4', '2 4', '10 4 2 4'][Math.min(3, vers.indexOf(o.r.ver))];
-    o.color = shade ? 'color-mix(in srgb, ' + base + ' ' + Math.max(40, 100 - 25 * shade) + '%, var(--panel))' : base;
+    o.dash = o.r.variant ? '4 2 1 2' : ['none', '6 4', '2 4', '10 4 2 4'][Math.min(3, vers.indexOf(o.r.ver))];
+    o.color = shade ? 'color-mix(in srgb, ' + base + ' ' + Math.max(40, 100 - 25 * shade) + '%, var(--panel))' : o.r.variant ? 'color-mix(in srgb, ' + base + ' 65%, var(--text))' : base;
   });
   // Shown by default: the newest RNGD release at its smallest device count, and each GPU's newest
   // framework at the device count closest to it. The checkboxes override this (state.on).
@@ -286,7 +291,7 @@ PAGES.explorer = async function (st) {
   });
   // A selection left over from another model or task matches nothing here: fall back to the defaults.
   const on = st.on && all.some((o) => st.on.split('~').indexOf(o.r.id) >= 0) ? st.on.split('~') : null;
-  all.forEach((o) => { o.on = on ? on.indexOf(o.r.id) >= 0 : o.r.ver === newestHere[o.r.hw] && o.r.n === nearestN[o.r.hw]; });
+  all.forEach((o) => { o.on = on ? on.indexOf(o.r.id) >= 0 : !o.r.variant && o.r.ver === newestHere[o.r.hw] && o.r.n === nearestN[o.r.hw]; });
   SHOWN = all.filter((o) => o.on).map((o) => o.r.id);
   const visible = all.filter((o) => o.on);
 
@@ -307,13 +312,30 @@ PAGES.explorer = async function (st) {
     },
   };
   const mx = AXES[xKey];
-  // Image + text: the same server's text-only run at the same ISL/OSL, dotted beside each series, shows what the image costs.
-  const overlay = task === 'image-text' && st.overlay !== 'off';
+  // Image + text: the same server's text-only run, dotted beside each series. By default at the same total input
+  // length (text + image tokens, so only the image encoder and its placement differ), or at the same text length
+  // (what one more image costs a request). The image tokens come from the server's prompt-token counter:
+  // tokens per request − the text ISL (the client counts text only).
+  const overlayMode = ['total', 'text', 'off'].indexOf(st.overlay) >= 0 ? st.overlay : 'total';
+  const overlay = task === 'image-text' && overlayMode !== 'off';
   const textRunOf = (r) => gen.filter((t) => t.task === 'text' && t.model === r.model && t.hw === r.hw && t.n === r.n && t.layout === r.layout && t.backend === r.backend && t.ver === r.ver)[0];
-  const overlays = overlay ? visible.map((o) => ({ o: o, r: textRunOf(o.r) })).filter((x) => x.r) : [];
+  const imageTokens = (pts) => {
+    const xs = pts.filter((p) => p.ok && p.raw.server_prompt_tps > 0 && p.raw.active_s > 0 && p.raw.completed > 0).map((p) => p.raw.server_prompt_tps * p.raw.active_s / p.raw.completed - p.isl);
+    return xs.length ? Math.round(median(xs)) : null;
+  };
+  const overlays = overlay ? visible.map((o) => ({ o: o, r: textRunOf(o.r), imgTok: imageTokens(o.pts) })).filter((x) => x.r) : [];
   await loadPoints(overlays.map((x) => x.r));
-  overlays.forEach((x) => { x.pts = pointsAt(x.r, isl, osl, ''); });
-  const withOverlay = visible.concat(overlays.filter((x) => x.pts.length).map((x) => ({ r: x.r, pts: x.pts, label: x.o.label + ' · text only', color: x.o.color, dash: '1 4', textOnly: true })));
+  overlays.forEach((x) => {
+    // The text scenario: the same OSL at the ISL nearest the target (the text preset steps 512, 1024, 2048, 7168, …).
+    const target = overlayMode === 'total' && x.imgTok !== null ? isl + x.imgTok : isl;
+    const cands = (x.r.shapes || []).map(shapeParts).filter((q) => q.osl === osl && !q.img);
+    const best = cands.sort((a, b) => Math.abs(a.isl - target) - Math.abs(b.isl - target))[0];
+    x.scen = best ? best.isl + '/' + best.osl : null;
+    x.pts = x.scen ? pointsAt(x.r, x.scen) : [];
+    x.exact = best && Math.abs(best.isl - target) <= target * 0.1;
+    x.name = x.o.label + ' · text only ' + (x.scen || '') + (overlayMode === 'total' && x.imgTok !== null ? ' ≈ ' + isl + ' text + ' + x.imgTok + ' image' : '');
+  });
+  const withOverlay = visible.concat(overlays.filter((x) => x.pts.length).map((x) => ({ r: x.r, pts: x.pts, label: x.name, color: x.o.color, dash: '1 4', textOnly: true })));
   // Failed points stay off the chart (the batch tables grey them).
   let xmax = 0, ymax = 0;
   const plotted = withOverlay.map((o) => {
@@ -380,7 +402,7 @@ PAGES.explorer = async function (st) {
   // Batch tables, one per Y metric: a row per batch (concurrency), a column per series shown.
   const concs = [...new Set(visible.flatMap((o) => o.pts.map((p) => p.conc)))].sort((a, b) => a - b);
   const colHead = visible.map((o) => '<th class="num"><span style="color:' + o.color + '">●</span> ' + esc(hwName(o.r.hw) + ' ×' + o.r.n)
-    + '<div class="faint mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver) + '</div></th>').join('');
+    + '<div class="faint mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver + (o.r.variant ? ' · ' + variantShort(o.r.variant) : '')) + '</div></th>').join('');
   // The metric is picked from tiles; until the viewer picks one, the table follows the Y axis.
   const metricOf = (k) => (k === yKey ? my : AXES[k]);
   const tItems = Y_KEYS.filter((k) => k !== 'custom' || yKey === 'custom').map((k) => ({ key: k, name: metricOf(k).title || metricOf(k).label(), sub: k === yKey ? 'Y axis' : '' }));
@@ -402,11 +424,16 @@ PAGES.explorer = async function (st) {
   // Each legend entry opens how that run was measured (run.js).
   const legend = '<div class="legend chart-legend">' + visible.map((o) => '<a class="run-link" title="How this run was measured" href="#run?id=' + encodeURIComponent(o.r.id) + '&scen=' + encodeURIComponent(scen) + '"><svg width="22" height="10" aria-hidden="true"><line x1="1" y1="5" x2="21" y2="5" stroke="' + o.color
     + '" stroke-width="3" stroke-linecap="round" stroke-dasharray="' + o.dash + '"/></svg><b>' + esc(hwName(o.r.hw) + ' ×' + o.r.n + (o.r.layout ? ' ' + o.r.layout : ''))
-    + '</b><span class="mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver) + '</span><span class="faint">↗</span></a>').join('')
-    + (overlays.some((x) => x.pts.length) ? '<span class="faint"><svg width="22" height="10" aria-hidden="true"><line x1="1" y1="5" x2="21" y2="5" stroke="var(--muted)" stroke-width="2" stroke-dasharray="1 4"/></svg> dotted = the same server, text only, ' + isl + '/' + osl + '</span>' : '') + '</div>';
+    + '</b><span class="mono">' + esc(backendLabel(o.r.backend) + ' ' + o.r.ver + (o.r.variant ? ' · ' + variantShort(o.r.variant) : '')) + '</span><span class="faint">↗</span></a>').join('')
+    + overlays.filter((x) => x.pts.length).map((x) => '<span class="faint"><svg width="22" height="10" aria-hidden="true"><line x1="1" y1="5" x2="21" y2="5" stroke="' + x.o.color + '" stroke-width="2" stroke-dasharray="1 4"/></svg>' + esc(x.name.replace(x.o.label + ' · ', '')) + '</span>').join('') + '</div>';
   const kwText = [...new Set(visible.map((o) => family(o.r.hw)))].filter((f) => SERVER_KW[f]).map((f) => FAMILY_NAME[f] + ' ' + familyKw(f) + ' kW').join(', ');
   // Shown: what changes how the numbers read. Folded: the full description of the chart.
-  const overlayNote = !overlay ? '' : overlays.some((x) => x.pts.length) ? ' Dotted: the same server serving text only at ' + isl + '/' + osl + ' (no image).' : ' No text-only run at ' + isl + '/' + osl + ' for these servers to overlay.';
+  const overlayNote = !overlay ? '' : !overlays.some((x) => x.pts.length) ? ' No text-only run of these servers to overlay.'
+    : overlayMode === 'total'
+      ? ' Dotted: the same server serving text only at the same total input length, text + image tokens (image tokens = the server\'s prompt tokens per request − the text ISL).'
+        + (overlays.some((x) => x.pts.length && !x.exact) ? ' Where the text preset has no row at that length, the nearest one is drawn: ' + overlays.filter((x) => x.pts.length && !x.exact).map((x) => x.scen + ' for ' + (isl + x.imgTok)).join(', ') + '.' : '')
+        + (overlays.some((x) => x.pts.length && x.imgTok === null) ? ' A run without the server prompt-token counter falls back to the same text length.' : '')
+      : ' Dotted: the same server serving the same text (' + isl + '/' + osl + ') without the image.' + (overlays.some((x) => x.pts.length && shapeParts(x.scen).isl !== isl) ? ' The text preset has no ' + isl + '/' + osl + ' row, so the nearest is drawn: ' + [...new Set(overlays.filter((x) => x.pts.length).map((x) => x.scen))].join(', ') + '.' : '');
   const capShort = ((yKey === 'tps_kw' ? '8-card server power: ' + kwText + '.' : '') + (SCALE8 ? ' Scaled to an 8-card server (× 8 ÷ devices).' : '') + overlayNote
     + (yKey === 'custom' ? ' y = ' + formula + '.' : '') + vsMissing).trim();
   const caption = model + ', ' + shapeLabel(scen) + ' ISL/OSL. ' + visible.map((o) => o.label).join(', ') + '.'
@@ -415,7 +442,7 @@ PAGES.explorer = async function (st) {
   const subtitle = model + ' · ' + scenText + ' · ' + GEN_TASKS[task].toLowerCase(), fileBase = [model, isl + '-' + osl + (img ? '-' + img : '')].join('_');
   EXPORTS.main = {
     w: W, h: H, title: my.title || my.label(), subtitle: subtitle, file: (fileBase + '_' + yKey + '_vs_' + xKey).replace(/[^\w.-]+/g, '-'),
-    legend: visible.map((o) => ({ color: o.color, dash: o.dash, name: hwName(o.r.hw) + ' ×' + o.r.n, ver: backendLabel(o.r.backend) + ' ' + o.r.ver })),
+    legend: visible.map((o) => ({ color: o.color, dash: o.dash, name: hwName(o.r.hw) + ' ×' + o.r.n, ver: backendLabel(o.r.backend) + ' ' + o.r.ver + (o.r.variant ? ' · ' + variantShort(o.r.variant) : '') })),
   };
   // Rack capacity at the SLO (usersPerRack): whole 8-card servers per rack × users per server.
   const rackKw = +st.rack > 0 ? +st.rack : RACK_KW;
@@ -476,7 +503,7 @@ PAGES.explorer = async function (st) {
     + (showVs ? select('× RNGD vs', 'vs', vsG ? vsG.o.r.id : 'none', [{ v: 'none', label: 'None' }].concat(gpuGs.map((g) => ({ v: g.o.r.id, label: g.o.label })))) : '')
     + select('Rack capacity', 'rackview', showRack ? 'show' : 'hide', [{ v: 'hide', label: 'Hide' }, { v: 'show', label: 'Show' }])
     + select('Y scale', 'yscale', logY ? 'log' : 'linear', [{ v: 'linear', label: 'Linear' }, { v: 'log', label: 'Log' }])
-    + (task === 'image-text' ? select('Text-only run', 'overlay', overlay ? 'on' : 'off', [{ v: 'on', label: 'Overlay' }, { v: 'off', label: 'Hide' }]) : '')
+    + (task === 'image-text' ? select('Text-only run', 'overlay', overlayMode, [{ v: 'total', label: 'Same total length (text + image tokens)' }, { v: 'text', label: 'Same text length' }, { v: 'off', label: 'Hide' }]) : '')
     // Server power of each device family on the chart, when a number depends on it (TPS per kW, rack).
     + (yKey === 'tps_kw' || showRack ? serverKwInputs([...new Set(visible.map((o) => family(o.r.hw)))].sort((a, b) => FAMILY_ORDER[a] - FAMILY_ORDER[b])) : '') + '</div>'
     + '<div class="panel' + (showRack ? ' joined' : '') + '"><div class="panel-head"><div><h2 style="font-weight:400;font-size:18px">' + esc(my.title || my.label()) + (showRack ? ' <span class="faint">→</span> Users per rack' : '') + '</h2><div class="muted">' + esc(scenText) + ' · ' + esc(GEN_TASKS[task].toLowerCase()) + '</div></div>'
