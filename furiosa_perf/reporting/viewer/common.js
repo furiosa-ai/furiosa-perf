@@ -28,6 +28,7 @@ function toPoint(raw) {
     image: raw['Image'] || '',  // image-text: the image sent with every request, e.g. 512x512
     batch: raw['Inputs per Request'] || 1,  // embedding: texts per request; rerank: documents per query
     seq: seq,  // embedding: texts/s; rerank: query-document pairs/s
+    tokText: total > 0 && seq > 0 ? total / seq : null,  // tokens the server counted per text or pair: below the ISL when it truncated
     reqps: raw['Request Throughput(req/s)'], e2el50: raw['Median E2EL(s)'], e2el99: raw['P99 E2EL(s)'], duration: raw['active_s'],
     ttft50: raw['Median TTFT(s)'], ttft99: raw['P99 TTFT(s)'], tpot50: raw['Median TPOT(ms)'], tpot99: raw['P99 TPOT(ms)'],
     power: raw['mean_power'],

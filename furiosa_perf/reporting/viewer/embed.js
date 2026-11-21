@@ -107,9 +107,11 @@ async function renderEmbed(st, task, asideTop) {
   svg += '<text class="axis-title" x="' + (EL + ER) / 2 + '" y="' + (EH - 4) + '" text-anchor="middle">' + esc(EMBED_X[xKey].toUpperCase()) + '</text>';
   svg += '<text class="axis-title" transform="translate(14 ' + (ET + EB) / 2 + ') rotate(-90)" text-anchor="middle">' + esc(Y.label(task).toUpperCase()) + '</text>';
   if (slo && !Y.higher) svg += '<line x1="' + EL + '" x2="' + ER + '" y1="' + py(slo) + '" y2="' + py(slo) + '" stroke="var(--faint)" stroke-dasharray="2 4"/><text x="' + (ER - 4) + '" y="' + (py(slo) - 6) + '" text-anchor="end">E2EL limit ' + slo + ' s</text>';
+  // The server counted fewer tokens per text than the ISL: it truncated the input to its limit (bge-m3 past 8192).
+  const cut = (p) => (p.tokText > 0 && p.tokText < p.isl * 0.9 ? Math.round(p.tokText) : 0);
   const tipOf = (p) => 'ISL ' + p.isl + ' · b' + p.conc + ' · ' + batchLabel(task, p.batch).split(' · ')[0]
     + '\nTotal TPS ' + fmt(tokensPerSec(p)) + '\n' + Y.label(task).replace(/ \(s\)$/, '') + ' ' + fmt(Y.f(p))
-    + '\nRPS ' + fmt(p.reqps) + (task === 'embedding' && p.batch === 1 ? ' (sent ' + p.conc + ')' : '') + '\nE2EL p50 ' + fmt(p.e2el50) + ' s · p99 ' + fmt(p.e2el99) + ' s\nDuration ' + fmt(p.duration) + ' s';
+    + '\nRPS ' + fmt(p.reqps) + (task === 'embedding' && p.batch === 1 ? ' (sent ' + p.conc + ')' : '') + '\nE2EL p50 ' + fmt(p.e2el50) + ' s · p99 ' + fmt(p.e2el99) + ' s\nDuration ' + fmt(p.duration) + ' s' + (cut(p) ? '\nTruncated by the server to ~' + cut(p) + ' tokens per text' : '');
   plotted.forEach((g) => {
     if (g.vals.length > 1) svg += '<path d="' + smoothPath(g.vals.map((v) => ({ x: px(v.x), y: py(v.y) }))) + '" fill="none" stroke="' + g.o.color + '" stroke-width="2.5" stroke-dasharray="' + g.o.dash + '"/>';
     g.vals.forEach((v) => { svg += '<circle cx="' + px(v.x) + '" cy="' + py(v.y) + '" r="3.5" fill="' + g.o.color + '" stroke="var(--panel)" stroke-width="1.5"><title>' + esc(g.o.label + '\n' + tipOf(v.p)) + '</title></circle>'; });
@@ -131,6 +133,7 @@ async function renderEmbed(st, task, asideTop) {
       const low = task === 'embedding' && p.batch === 1 && p.reqps > 0 && p.reqps < p.conc * 0.9;  // open loop: fewer requests/s than the rate asked = overloaded
       return '<td class="num' + (p.ok ? '' : ' faint') + '" title="' + esc(tipOf(p) + (q ? '\n\n' + vsSeries.label + '\n' + tipOf(q) : '')) + '">' + (p.ok ? fmt(v) : '<span class="fail">' + esc(p.raw.fail_reason || 'failed') + '</span>')
         + (low ? '<span class="sub muted" title="RPS achieved, below the RPS sent">' + fmt(p.reqps) + ' RPS</span>' : '')
+        + (cut(p) ? '<span class="sub muted" title="The server truncated every text to this many tokens">↓' + cut(p) + ' tok</span>' : '')
         + (k !== null ? '<span class="sub" style="color:' + (k >= 1 ? 'var(--accent)' : 'var(--muted)') + '">' + multText(k, Y.higher) + '</span>' : '') + '</td>';
     }).join('') + '</tr>').join('') + '</tbody></table></div>';
 
