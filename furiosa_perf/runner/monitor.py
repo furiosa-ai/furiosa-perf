@@ -166,51 +166,58 @@ class HardwareMonitor:
                 f.write(HardwareMonitorData.header())
                 while not stop_event.is_set():
                     start_time = time.perf_counter()
-                    data = HardwareMonitorData()
-                    data.timestamp = datetime.now(UTC).isoformat()
+                    try:
+                        data = HardwareMonitorData()
+                        data.timestamp = datetime.now(UTC).isoformat()
 
-                    for device in devices:
-                        power_consumption = device.power_consumption()
-                        utilization = (
-                            # Furiosa core utilization is reported per-PE;
-                            # divide by 8 to get a device-level average.
-                            sum(pe.pe_usage_percentage() for pe in observer.get_core_utilization(device))
-                            / 8
-                        )
-                        temperature = device.device_temperature().soc_peak()
-                        if utilization > 0:
-                            data.used_device_num += 1
-                            data.power_consumption += power_consumption
-                            data.peak_temperature = max(data.peak_temperature, temperature)
-                            data.avg_utilization += utilization
+                        for device in devices:
+                            power_consumption = device.power_consumption()
+                            utilization = (
+                                # Furiosa core utilization is reported per-PE;
+                                # divide by 8 to get a device-level average.
+                                sum(pe.pe_usage_percentage() for pe in observer.get_core_utilization(device))
+                                / 8
+                            )
+                            temperature = device.device_temperature().soc_peak()
+                            if utilization > 0:
+                                data.used_device_num += 1
+                                data.power_consumption += power_consumption
+                                data.peak_temperature = max(data.peak_temperature, temperature)
+                                data.avg_utilization += utilization
 
-                    metrics_text = HardwareMonitor._fetch_metrics_text(host, port)
-                    if metrics_text is None:
+                        metrics_text = HardwareMonitor._fetch_metrics_text(host, port)
+                        if metrics_text is None:
+                            f.write(str(data))
+                            f.flush()
+                            time.sleep(interval)
+                            continue
+
+                        for line in metrics_text.splitlines():
+                            if line.startswith("furiosa_llm_kv_cache_usage_perc"):
+                                data.kv_cache_usage_percentage = float(line.split()[-1])
+                            if line.startswith("furiosa_llm_num_requests_running"):
+                                data.num_requests_running = float(line.split()[-1])
+                            if line.startswith("furiosa_llm_num_requests_waiting"):
+                                data.num_requests_waiting = float(line.split()[-1])
+
+                        if server_pid != -1:
+                            tree_cpu, rss_gib = HardwareMonitor._get_process_tree_usage(parent)
+                        else:
+                            tree_cpu = 0.0
+                            rss_gib = 0.0
+
+                        data.host_cpu_utils = tree_cpu
+                        data.host_memory_usage_gib = rss_gib
+
                         f.write(str(data))
                         f.flush()
-                        time.sleep(interval)
-                        continue
-
-                    for line in metrics_text.splitlines():
-                        if line.startswith("furiosa_llm_kv_cache_usage_perc"):
-                            data.kv_cache_usage_percentage = float(line.split()[-1])
-                        if line.startswith("furiosa_llm_num_requests_running"):
-                            data.num_requests_running = float(line.split()[-1])
-                        if line.startswith("furiosa_llm_num_requests_waiting"):
-                            data.num_requests_waiting = float(line.split()[-1])
-
-                    if server_pid != -1:
-                        tree_cpu, rss_gib = HardwareMonitor._get_process_tree_usage(parent)
-                    else:
-                        tree_cpu = 0.0
-                        rss_gib = 0.0
-
-                    data.host_cpu_utils = tree_cpu
-                    data.host_memory_usage_gib = rss_gib
-
-                    f.write(str(data))
-                    f.flush()
-                    HardwareMonitor._safe_sleep(interval, start_time)
+                        HardwareMonitor._safe_sleep(interval, start_time)
+                    except Exception:
+                        # A single failed sample (driver hiccup, malformed /metrics line, ...) must not
+                        # end monitoring: the monitor runs once for all scenarios, so every later
+                        # scenario would silently get an empty CSV.
+                        logger.warning("Skipping an NPU monitoring sample after an error.", exc_info=True)
+                        HardwareMonitor._safe_sleep(interval, start_time)
         except KeyboardInterrupt:
             logger.info("Furiosa NPU monitoring stopped by user.")
 
@@ -233,66 +240,73 @@ class HardwareMonitor:
                 f.write(HardwareMonitorData.header())
                 while not stop_event.is_set():
                     start_time = time.perf_counter()
-                    data = HardwareMonitorData()
-                    data.timestamp = datetime.now(UTC).isoformat()
-
                     try:
-                        nvidia_smi = subprocess.Popen(
-                            [
-                                "nvidia-smi",
-                                "--query-gpu=name,utilization.gpu,power.draw," "temperature.gpu",
-                                "--format=csv,noheader,nounits",
-                            ],
-                            stdout=subprocess.PIPE,
-                        )
-                        output, _ = nvidia_smi.communicate()
-                    except FileNotFoundError:
-                        logger.warning("nvidia-smi not found. Skipping NVIDIA GPU monitoring.")
-                        return
+                        data = HardwareMonitorData()
+                        data.timestamp = datetime.now(UTC).isoformat()
 
-                    devices_status = output.decode("utf-8").strip().split("\n")
-                    for device_status in devices_status:
-                        device_info = device_status.split(",")
-                        utilization, power_consumption, temperature = map(
-                            float,
-                            device_info[1:4],
-                        )
-                        if utilization > 0:
-                            data.used_device_num += 1
-                            data.power_consumption += power_consumption
-                            data.peak_temperature = max(
-                                data.peak_temperature,
-                                temperature,
+                        try:
+                            nvidia_smi = subprocess.Popen(
+                                [
+                                    "nvidia-smi",
+                                    "--query-gpu=name,utilization.gpu,power.draw," "temperature.gpu",
+                                    "--format=csv,noheader,nounits",
+                                ],
+                                stdout=subprocess.PIPE,
                             )
-                            data.avg_utilization += utilization
+                            output, _ = nvidia_smi.communicate()
+                        except FileNotFoundError:
+                            logger.warning("nvidia-smi not found. Skipping NVIDIA GPU monitoring.")
+                            return
 
-                    metrics_text = HardwareMonitor._fetch_metrics_text(host, port)
-                    if metrics_text is None:
+                        devices_status = output.decode("utf-8").strip().split("\n")
+                        for device_status in devices_status:
+                            device_info = device_status.split(",")
+                            utilization, power_consumption, temperature = map(
+                                float,
+                                device_info[1:4],
+                            )
+                            if utilization > 0:
+                                data.used_device_num += 1
+                                data.power_consumption += power_consumption
+                                data.peak_temperature = max(
+                                    data.peak_temperature,
+                                    temperature,
+                                )
+                                data.avg_utilization += utilization
+
+                        metrics_text = HardwareMonitor._fetch_metrics_text(host, port)
+                        if metrics_text is None:
+                            f.write(str(data))
+                            f.flush()
+                            time.sleep(interval)
+                            continue
+
+                        for line in metrics_text.splitlines():
+                            if line.startswith("vllm:kv_cache_usage_perc"):
+                                data.kv_cache_usage_percentage = float(line.split()[-1])
+                            if line.startswith("vllm:num_requests_running"):
+                                data.num_requests_running = float(line.split()[-1])
+                            if line.startswith("vllm:num_requests_waiting"):
+                                data.num_requests_waiting = float(line.split()[-1])
+
+                        if server_pid != -1:
+                            tree_cpu, rss_gib = HardwareMonitor._get_process_tree_usage(parent)
+                        else:
+                            tree_cpu = 0.0
+                            rss_gib = 0.0
+
+                        data.host_cpu_utils = tree_cpu
+                        data.host_memory_usage_gib = rss_gib
+
                         f.write(str(data))
                         f.flush()
-                        time.sleep(interval)
-                        continue
-
-                    for line in metrics_text.splitlines():
-                        if line.startswith("vllm:kv_cache_usage_perc"):
-                            data.kv_cache_usage_percentage = float(line.split()[-1])
-                        if line.startswith("vllm:num_requests_running"):
-                            data.num_requests_running = float(line.split()[-1])
-                        if line.startswith("vllm:num_requests_waiting"):
-                            data.num_requests_waiting = float(line.split()[-1])
-
-                    if server_pid != -1:
-                        tree_cpu, rss_gib = HardwareMonitor._get_process_tree_usage(parent)
-                    else:
-                        tree_cpu = 0.0
-                        rss_gib = 0.0
-
-                    data.host_cpu_utils = tree_cpu
-                    data.host_memory_usage_gib = rss_gib
-
-                    f.write(str(data))
-                    f.flush()
-                    HardwareMonitor._safe_sleep(interval, start_time)
+                        HardwareMonitor._safe_sleep(interval, start_time)
+                    except Exception:
+                        # A single failed sample (driver hiccup, malformed /metrics line, ...) must not
+                        # end monitoring: the monitor runs once for all scenarios, so every later
+                        # scenario would silently get an empty CSV.
+                        logger.warning("Skipping a GPU monitoring sample after an error.", exc_info=True)
+                        HardwareMonitor._safe_sleep(interval, start_time)
         except KeyboardInterrupt:
             logger.info("NVIDIA GPU monitoring stopped by user.")
 
