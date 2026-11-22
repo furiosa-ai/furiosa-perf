@@ -387,6 +387,11 @@ class BenchmarkRunner:
             proc: The monitoring :class:`multiprocessing.Process` to stop.
             event: The stop event to signal first.
         """
+        if not proc.is_alive() and proc.exitcode != 0:
+            logger.error(
+                f"Monitoring process exited early (exit code {proc.exitcode}); "
+                "monitoring logs of scenarios that ran after it stopped are empty."
+            )
         event.set()
         proc.join(timeout=5)
         if proc.is_alive():
