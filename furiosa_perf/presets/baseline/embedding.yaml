@@ -1,0 +1,39 @@
+# Fixed-length baseline for embedding models over every input length the models take, in the two
+# ways they are used. Queries: one text per request from N users who each send about one request
+# a second (request-rate = concurrency), 30 s of arrivals per point; E2EL against the user count
+# is what an SLO reads, and a point whose request throughput falls short of its rate is overloaded.
+# Indexing: 16, 32 or 64 chunks per request, as an indexing job sends them, as fast as the server
+# takes them, 10 requests per concurrency; total tok/s per length is the number.
+kind: baseline
+task: embedding
+client: vllm-bench
+
+server:
+  no-enable-prefix-caching: true
+
+args:
+  backend: openai-embeddings
+  endpoint: /v1/embeddings
+  dataset-name: random
+  trust-remote-code: true
+  percentile-metrics: e2el
+  metric-percentiles: 25,50,75,90,95,99
+  prompts-per-concurrency: 30  # requests per user per point (30 s at one request a second)
+
+# Lengths are the attention buckets of the RNGD builds (128 ... 32K; Qwen3-Embedding-4B/8B also take
+# 40960, bge-m3 stops at 8K and fails beyond). Concurrency narrows with length: nobody sends 256
+# 32K-token requests a second, and a point's tokens grow as length x users.
+# random-batch-size = texts per request; with a request rate, vllm bench caps the requests in
+# flight at max-concurrency and holds the rest in the client, outside E2EL: an overloaded point
+# shows as a request throughput below its rate, not only as a long E2EL.
+matrix:
+  # Queries: one text per request, one request per user per second.
+  - {random-input-len: [128, 256, 512, 1024, 2048], random-batch-size: 1, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256], request-rate: max-concurrency}
+  - {random-input-len: 4096, random-batch-size: 1, max-concurrency: [1, 4, 8, 16, 32, 64, 128], request-rate: max-concurrency}
+  - {random-input-len: 8192, random-batch-size: 1, max-concurrency: [1, 4, 8, 16, 32, 64], request-rate: max-concurrency}
+  - {random-input-len: 16384, random-batch-size: 1, max-concurrency: [1, 4, 8, 16, 32], request-rate: max-concurrency}
+  - {random-input-len: 32768, random-batch-size: 1, max-concurrency: [1, 4, 8, 16], request-rate: max-concurrency}
+  # Indexing: chunks per request 16 / 32 / 64, closed loop, 10 requests per concurrency.
+  - {random-input-len: [128, 256, 512, 1024, 2048], random-batch-size: [16, 32, 64], max-concurrency: [1, 4, 16], prompts-per-concurrency: 10}
+  - {random-input-len: [4096, 8192], random-batch-size: [16, 32, 64], max-concurrency: [1, 4], prompts-per-concurrency: 10}
+  - {random-input-len: [16384, 32768], random-batch-size: [16, 32, 64], max-concurrency: 1, prompts-per-concurrency: 10}

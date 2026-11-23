@@ -1,356 +1,262 @@
-"""Server lifecycle management and benchmark orchestration."""
+"""Benchmark orchestration: server -> monitor -> benchmark client -> teardown."""
 
-import multiprocessing
-import os
 import signal
-import subprocess
-import time
+from collections.abc import Callable
 from dataclasses import asdict
-from multiprocessing.synchronize import Event as EventType
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any
 
-import psutil
 import requests
 
-from furiosa_perf.benchmark.vllm import VllmPerformanceBenchmark
-from furiosa_perf.runner.monitor import HardwareMonitor
-from furiosa_perf.utils.config import (
-    APIServerConfig,
-    FuriosaLLMServerConfig,
-    PerformanceBenchConfig,
-    VllmServerConfig,
-)
-from furiosa_perf.utils.logger import logger
+from furiosa_perf.clients.aiperf import AiperfClient
+from furiosa_perf.clients.base import BenchmarkClient
+from furiosa_perf.clients.vllm_bench import VllmBenchClient
+from furiosa_perf.log import logger
+from furiosa_perf.results.store import ENV_DIR, RUN_FILE, SERVER_LOG, prepare_run_dir, run_dir, write_json
+from furiosa_perf.runner.env import Environment, device_label, freeze, power_settings
+from furiosa_perf.runner.monitor import HardwareMonitor, MonitorConfig
+from furiosa_perf.runner.server import APIServerManager
+from furiosa_perf.spec import Preset, Server, variant_label
 
-
-class APIServerManager:
-    """Manage the lifecycle of a vLLM or furiosa-llm API server subprocess.
-
-    Handles starting, health-checking, and stopping the server process, and
-    streams server logs to the logger while waiting for startup.
-    """
-
-    def __init__(
-        self,
-        config: APIServerConfig,
-        model: str = "furiosa-ai/Llama-3.1-8B-Instruct",
-    ) -> None:
-        """Initialise the manager without starting the server.
-
-        Args:
-            config: Server configuration (host, port, devices, …).
-            model: HuggingFace model ID or local path to serve.
-        """
-        self.model = model
-        self.config = config
-        self.server_process: subprocess.Popen[str] | None = None
-        self.server_ready = False
-        self.server_pid = -1
-        self._log_file: TextIO | None = None
-        self._log_path: Path | None = None
-
-    def __del__(self) -> None:
-        self.stop()
-
-    def start(self) -> str:
-        """Start the API server and wait until it is ready.
-
-        Returns:
-            The full server command as a space-joined string, or ``""`` if the
-            server was already running.
-
-        Raises:
-            ValueError: If the command cannot be built from the config.
-            RuntimeError: If the server does not become healthy within the timeout.
-        """
-        if self._is_api_server_ready(self.model):
-            logger.warning(f"API server already running for model: {self.model}")
-            self._get_opened_server_pid()
-            return ""
-
-        if self.server_process and self.server_process.poll() is None:
-            logger.warning("Server already running.")
-            self._get_opened_server_pid()
-            return ""
-
-        command, env = self._build_command()
-        if not command:
-            raise ValueError("Failed to build server command.")
-
-        logger.info(f"Starting server: {' '.join(command)}")
-
-        log_dir = Path("./serve_logs")
-        log_dir.mkdir(parents=True, exist_ok=True)
-        safe_model_name = self.model.replace("/", "_")
-        self._log_path = log_dir / f"serve_{safe_model_name}_{int(time.time())}.log"
-        logger.info(f"Server log: {self._log_path}")
-        self._log_file = open(self._log_path, "w", buffering=1)  # noqa: SIM115, PTH123
-
-        env["PYTHONUNBUFFERED"] = "1"
-        self.server_process = subprocess.Popen(
-            command,
-            env=env,
-            stdout=self._log_file,
-            stderr=self._log_file,
-            text=True,
-            start_new_session=True,
-        )
-
-        self._wait_for_startup(url=f"http://{self.config.host}:{self.config.port}/v1/models")
-        self.server_ready = True
-        self.server_pid = self.server_process.pid
-        logger.info("Server is ready.")
-        return " ".join(command)
-
-    def stop(self) -> None:
-        """Terminate the server process gracefully, falling back to SIGKILL."""
-        if not self.server_process:
-            return
-
-        if self.server_process.poll() is None:
-            logger.info("Stopping server process…")
-            try:
-                os.killpg(os.getpgid(self.server_process.pid), signal.SIGTERM)
-                self.server_process.wait(timeout=5)
-                logger.info("Server process stopped successfully.")
-            except subprocess.TimeoutExpired:
-                os.killpg(os.getpgid(self.server_process.pid), signal.SIGKILL)
-                logger.warning("Server process force-killed.")
-        else:
-            logger.info(f"Server already exited with code {self.server_process.poll()}.")
-
-        self.server_process = None
-        self.server_ready = False
-        if self._log_file:
-            self._log_file.close()
-            self._log_file = None
-
-    def _to_kebab_case(self, s: str) -> str:
-        """Convert an underscore-separated string to kebab-case."""
-        return s.replace("_", "-")
-
-    def _build_command(self) -> tuple[list[str], dict[str, str]]:
-        """Construct the server CLI command and environment from the config.
-
-        Returns:
-            A tuple of ``(command_argv, env_dict)``.
-        """
-        env = os.environ.copy()
-        command: list[str] = []
-
-        if isinstance(self.config, VllmServerConfig):
-            command = ["vllm", "serve", self.model]
-            for key, value in asdict(self.config).items():
-                if value is None:
-                    continue
-                cli_key = self._to_kebab_case(key)
-                if isinstance(value, bool):
-                    if value:
-                        command.append(f"--{cli_key}")
-                elif isinstance(value, int | str | float):
-                    if isinstance(value, str) and cli_key == "devices":
-                        env["CUDA_VISIBLE_DEVICES"] = value
-                        continue
-                    command.extend([f"--{cli_key}", str(value)])
-                else:
-                    logger.warning(f"Unsupported config type for {key}: {type(value)}")
-
-        elif isinstance(self.config, FuriosaLLMServerConfig):
-            command = ["furiosa-llm", "serve", self.model]
-            for key, value in asdict(self.config).items():
-                if value is None:
-                    continue
-                cli_key = self._to_kebab_case(key)
-                if isinstance(value, bool):
-                    if value:
-                        command.append(f"--{cli_key}")
-                elif isinstance(value, int | str | float):
-                    if isinstance(value, str) and cli_key == "devices":
-                        # Convert "0,1,2,3" → "npu:0,npu:1,npu:2,npu:3"
-                        value = ",".join(f"npu:{idx}" for idx in value.split(","))
-                    if cli_key == "tensor-parallel-size":
-                        # furiosa-llm counts PEs (8 per NPU); vLLM counts NPUs.
-                        value = value * 8
-                    command.extend([f"--{cli_key}", str(value)])
-                else:
-                    logger.warning(f"Unsupported config type for {key}: {type(value)}")
-        else:
-            logger.error(f"Unsupported API server config type: {type(self.config)}")
-
-        return command, env
-
-    def _is_api_server_ready(self, expected_model_id: str) -> bool:
-        """Return True when the server is already serving *expected_model_id*.
-
-        Args:
-            expected_model_id: Model ID to match against ``/v1/models`` response.
-        """
-        url = f"http://{self.config.host}:{self.config.port}/v1/models"
-        try:
-            resp = requests.get(url, timeout=5)
-            resp.raise_for_status()
-            model_id = resp.json()["data"][0]["id"]
-            return model_id == expected_model_id  # type: ignore[no-any-return]
-        except (requests.RequestException, KeyError, IndexError, ValueError):
-            return False
-
-    def _wait_for_startup(
-        self, url: str = "http://localhost:8000/v1/models", timeout: int = 1800
-    ) -> None:
-        """Poll *url* until the server responds 200, streaming its log to the logger.
-
-        Args:
-            url: Health-check URL to poll.
-            timeout: Maximum seconds to wait before raising.
-
-        Raises:
-            RuntimeError: If the server process exits early or the timeout elapses.
-        """
-        start = time.time()
-        log_pos = 0
-
-        while True:
-            if self._log_path and self._log_path.exists():
-                with self._log_path.open() as f:
-                    f.seek(log_pos)
-                    for line in f:
-                        logger.info(f"[server] {line.rstrip()}")
-                    log_pos = f.tell()
-
-            if self.server_process and self.server_process.poll() is not None:
-                raise RuntimeError(
-                    f"Server exited unexpectedly (code {self.server_process.poll()}). "
-                    f"See {self._log_path}"
-                )
-
-            try:
-                resp = requests.get(url, timeout=5)
-                if resp.status_code == 200:
-                    logger.info("Server startup complete.")
-                    return
-            except requests.RequestException as e:
-                logger.debug(f"Server not ready yet: {e}")
-
-            if time.time() - start > timeout:
-                raise RuntimeError(
-                    f"Server did not start within {timeout}s. See {self._log_path}"
-                )
-
-            logger.info("Waiting for server launch — checking again in 30 s…")
-            time.sleep(30)
-
-    def _get_opened_server_pid(self) -> None:
-        """Populate :attr:`server_pid` by scanning running processes by name."""
-        if isinstance(self.config, VllmServerConfig):
-            process_name = "vllm"
-        elif isinstance(self.config, FuriosaLLMServerConfig):
-            process_name = "furiosa-llm"
-        else:
-            return
-
-        for proc in psutil.process_iter(["pid", "name"]):
-            if proc.info["name"] == process_name:
-                self.server_pid = proc.info["pid"]
+# Preset client name -> implementation.
+CLIENTS: dict[str, type[BenchmarkClient]] = {"vllm-bench": VllmBenchClient, "aiperf": AiperfClient}
 
 
 class BenchmarkRunner:
     """Orchestrate the full benchmark lifecycle: server → benchmark → teardown.
 
-    Owns the :class:`APIServerManager` and :class:`VllmPerformanceBenchmark`
-    instances and coordinates their startup, monitoring, and cleanup.
+    Owns the :class:`APIServerManager` and :class:`BenchmarkClient`
+    instances, coordinates their startup, monitoring and cleanup, and keeps
+    ``run.json`` of the run directory up to date.
     """
 
     def __init__(
         self,
-        system_info: Any,
-        hardware_type: str,
-        api_server_config: APIServerConfig,
-        benchmark_config: PerformanceBenchConfig,
+        environment: Environment,
+        server: Server,
+        preset: Preset,
+        output_dir: Path,
+        resume: bool = False,
+        overwrite: bool = False,
+        variant: dict[str, Any] | None = None,
     ) -> None:
-        """Store configuration for later use in :meth:`execute`.
+        """Resolve the run directory and the fields every record carries.
 
         Args:
-            system_info: :class:`SystemDetector.SystemEnv` namedtuple with OS/HW info.
-            hardware_type: Accelerator type (``"npu"`` or ``"gpu"``).
-            api_server_config: Parsed API server config dataclass.
-            benchmark_config: Parsed benchmark config dataclass with scenarios.
+            environment: Collected environment (see :func:`furiosa_perf.runner.env.collect`).
+            server: What API server to launch, with the preset's server options applied.
+            preset: What to measure.
+            output_dir: Root of the results tree.
+            resume: Continue a run already in the run directory.
+            overwrite: Replace a run already in the run directory.
+            variant: ``--server-arg`` options, already applied to ``server``; recorded, and
+                naming the run directory so the run sits next to the one without them.
         """
-        self.system_info = system_info
-        self.hardware_type = hardware_type
-        self.api_server_config = api_server_config
-        self.benchmark_config = benchmark_config
+        self.environment = environment
+        self.server = server
+        self.preset = preset
+        self.resume = resume
+        self.overwrite = overwrite
 
-    def execute(self, model: str) -> list[Any]:
-        """Run the full benchmark pipeline and return per-scenario results.
+        used = environment.used_devices(server.devices)
+        product = used[0]["name"] if used else "Unknown"
+        backend, backend_version = server.backend, str(environment.server_env.get("version"))
+        # The served ID is known before launch, so a conflicting run is found without starting the server.
+        self.model = str(server.args.get("served-model-name") or server.model)
+        self.identity: dict[str, Any] = {
+            "kind": preset.kind,
+            "task": preset.task,
+            "model": self.model,
+            "hardware": device_label(product, used),
+            "hardware_product": product,
+            "num_devices": len(server.devices),
+            "devices": server.devices,
+            "layout": server.parallel.label,
+            "parallel": asdict(server.parallel),
+            "backend": backend,
+            "backend_version": backend_version,
+            "variant": variant or {},
+        }
+        self.run_dir = run_dir(
+            output_dir.resolve(),  # clients run inside point directories, so relative paths would nest
+            preset.kind,
+            self.identity["hardware"],
+            len(server.devices),
+            server.parallel.label,
+            f"{backend}_{backend_version}",
+            preset.task,
+            self.model,
+            variant_label(variant or {}),
+        )
+
+    def execute(self, reuse_server: bool = False) -> list[Any]:
+        """Run the full benchmark pipeline and return per-point summary rows.
 
         Sequence:
-            1. Start the API server.
-            2. Query ``/v1/models`` to resolve the served model ID.
-            3. Set up and run the vLLM benchmark.
-            4. Start hardware monitoring alongside the benchmark.
-            5. On completion or error, stop all components in reverse order.
+            1. Prepare the run directory (refusing to mix runs) and write ``run.json``.
+            2. Start the API server.
+            3. Set up the client and start hardware monitoring.
+            4. Run every point.
+            5. On completion or error, stop everything and finish ``run.json``.
 
         Args:
-            model: HuggingFace model ID or local path to pass to the server.
+            reuse_server: Use a server already running on the configured port.
 
         Returns:
-            List of per-scenario result dicts from :attr:`VllmPerformanceBenchmark.total_results`.
+            List of per-point summary rows.
 
         Raises:
             Exception: Re-raises any exception from server startup or benchmark execution.
         """
-        api_server = APIServerManager(model=model, config=self.api_server_config)
-        benchmark: VllmPerformanceBenchmark | None = None
-        monitoring_proc: multiprocessing.Process | None = None
-        stop_monitor_event: EventType | None = None
+        prepare_run_dir(self.run_dir, self.resume, self.overwrite)
+        logger.info(f"Results: {self.run_dir}")
+        run_info = self._run_info()
+        write_json(self.run_dir / RUN_FILE, run_info)
+        self.environment.write_raw(self.run_dir / ENV_DIR)
+
+        api_server = APIServerManager(self.server, log_path=self.run_dir / SERVER_LOG)
+        benchmark: BenchmarkClient | None = None
+        monitor: HardwareMonitor | None = None
         desc = ""
+        status = "failed"
 
         try:
-            logger.info(f"Starting server for {model}")
-            server_command = api_server.start()
+            logger.info(f"Starting server for {self.server.model}")
+            server_command = api_server.start(reuse_running=reuse_server)
+            run_info["server"]["command"] = server_command
+            run_info["server"]["model_card"] = api_server.model_card()
+            write_json(self.run_dir / RUN_FILE, run_info)
             desc = (
-                f"* Ubuntu Version: {self.system_info.os}\n"
-                f"* Python Version: {self.system_info.python}\n"
-                f"* Framework Version: {self.system_info.runtime}\n"
+                f"* OS: {self.environment.host.get('os')}\n"
+                f"* Python Version: {self.environment.server_env.get('python_version')}\n"
+                f"* Framework Version: {self.identity['backend']} {self.identity['backend_version']}\n"
                 f"* API Server Command: {server_command}"
             )
+            served = self._fetch_pretrained_id(api_server)
+            if served != self.model:
+                logger.warning(f"the server reports model '{served}', the results are stored as '{self.model}'")
 
-            pretrained_id = self._fetch_pretrained_id(api_server)
-            self._configure_benchmark(pretrained_id)
-
-            benchmark = VllmPerformanceBenchmark(
-                config=self.benchmark_config,
-                backend=self.system_info.runtime,
-                host=api_server.config.host,
-                port=api_server.config.port,
-                env=os.environ.copy(),
+            benchmark = CLIENTS[self.preset.client](
+                preset=self.preset,
+                model=served,
+                host=self.server.host,
+                port=self.server.port,
+                run_dir=self.run_dir,
+                identity=self.identity,
+                resume=self.resume,
+                tokenizer=self.server.model,
             )
             benchmark.setup()
+            if benchmark.python is not None:
+                (self.run_dir / ENV_DIR / "client-freeze.txt").write_text(freeze(benchmark.python))
 
-            stop_monitor_event = multiprocessing.Event()
-            monitoring_proc = HardwareMonitor.start_monitor(
-                api_server.config.host,
-                api_server.config.port,
-                api_server.server_pid,
-                benchmark.device_name,
-                benchmark.used_device_num,
-                benchmark.base_dir,
-                stop_monitor_event,
+            monitor = HardwareMonitor(
+                MonitorConfig(
+                    host=self.server.host,
+                    port=self.server.port,
+                    server_pid=api_server.server_pid,
+                    # The monitor picks its sampler by name: "RNGD" for every NPU, the product for GPUs.
+                    device_name="RNGD" if self.server.hardware_type == "npu" else self.identity["hardware_product"],
+                    device_indices=self.server.devices,
+                    log_dir=self.run_dir,
+                )
             )
-            benchmark.run()
+            monitor.start()
+            benchmark.run(
+                monitor,
+                server_alive=lambda: api_server.served_model() is not None,
+                before_point=self._restart_hook(api_server, monitor)
+                if self.preset.restart_server == "per-point"
+                else None,
+            )
+            status = "finished"
 
+        except KeyboardInterrupt:
+            status = "interrupted"
+            raise
         except Exception:
             logger.exception("Benchmark execution failed.")
             raise
         finally:
             old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
             try:
-                self._cleanup(benchmark, monitoring_proc, stop_monitor_event, api_server, desc)
+                self._cleanup(benchmark, monitor, api_server, desc)
+                rows = benchmark.total_results["results"] if benchmark is not None else []
+                run_info["power_settings_changed"] = self._power_settings_changed()
+                if benchmark is not None:
+                    run_info.update(benchmark.run_summary())
+                run_info.update(
+                    status=status,
+                    finished=datetime.now(timezone.utc).isoformat(),
+                    num_points=len(rows),
+                    num_invalid=sum(not row["ok"] for row in rows),
+                )
+                write_json(self.run_dir / RUN_FILE, run_info)
             finally:
                 signal.signal(signal.SIGINT, old_sigint)
 
         return benchmark.total_results["results"]  # type: ignore[no-any-return]
+
+    @staticmethod
+    def _restart_hook(api_server: APIServerManager, monitor: HardwareMonitor) -> Callable[[], None]:
+        """Restart the server (and point the monitor at it) before every measured point but the first.
+
+        The first point runs on the server launched for the run, which nothing has used yet.
+        """
+        launched_fresh = True
+
+        def restart() -> None:
+            nonlocal launched_fresh
+            if launched_fresh:
+                launched_fresh = False
+                return
+            logger.info("Restarting the server for the next point (restart-server: per-point)")
+            api_server.restart()
+            monitor.restart(server_pid=api_server.server_pid)
+
+        return restart
+
+    def _power_settings_changed(self) -> bool | None:
+        """Whether a used device's power limit or governor changed since the run started.
+
+        Power and efficiency figures assume the settings recorded at the start; a
+        change in between is logged and flagged in ``run.json``.
+        """
+        keys = ("index", "governor") if self.server.hardware_type == "npu" else ("index", "power_limit_w")
+        before = [{key: d.get(key) for key in keys} for d in self.environment.used_devices(self.server.devices)]
+        try:
+            after = power_settings(self.server.hardware_type, self.server.devices)
+        except Exception as e:
+            logger.warning(f"cannot re-read the power settings at the end of the run; cause: {e}")
+            return None
+        if after != before:
+            logger.warning(f"the device power settings changed during the run: {before} -> {after}")
+        return after != before
+
+    def _run_info(self) -> dict[str, Any]:
+        """Initial content of ``run.json``: what is run, on what, with which versions."""
+        return {
+            **self.identity,
+            "status": "running",
+            "started": datetime.now(timezone.utc).isoformat(),
+            "finished": None,
+            "client": self.preset.client,
+            "client_version": CLIENTS[self.preset.client].VERSION,
+            "environment": self.environment.summary(self.server.devices),
+            "server": {
+                "backend": self.server.backend,
+                "model": self.server.model,
+                "env": str(self.server.env),
+                "host": self.server.host,
+                "port": self.server.port,
+                "args": self.server.args,
+                "command": None,
+            },
+            "preset": {"server": self.preset.server, "points": self.preset.points},
+            "num_points": len(self.preset.points),
+            "num_invalid": None,
+        }
 
     def _fetch_pretrained_id(self, api_server: APIServerManager) -> str:
         """Query ``/v1/models`` and return the first model's ID.
@@ -364,45 +270,14 @@ class BenchmarkRunner:
         Raises:
             requests.HTTPError: If the server responds with a non-2xx status.
         """
-        resp = requests.get(f"http://{api_server.config.host}:{api_server.config.port}/v1/models", timeout=5)
+        resp = requests.get(f"{api_server.base_url}/v1/models", timeout=5)
         resp.raise_for_status()
         return resp.json()["data"][0]["id"]  # type: ignore[no-any-return]
 
-    def _configure_benchmark(self, pretrained_id: str) -> None:
-        """Populate benchmark_config fields resolved at runtime.
-
-        Args:
-            pretrained_id: Model ID returned by the running API server.
-        """
-        self.benchmark_config.model = pretrained_id
-        self.benchmark_config.device_name = self.system_info.hardware[self.hardware_type]["name"]
-        self.benchmark_config.used_device_num = len((self.api_server_config.devices or "").split(","))
-
-    def _stop_monitor(
-        self, proc: multiprocessing.Process, event: EventType
-    ) -> None:
-        """Stop the monitoring process with graceful → terminate → kill escalation.
-
-        Args:
-            proc: The monitoring :class:`multiprocessing.Process` to stop.
-            event: The stop event to signal first.
-        """
-        event.set()
-        proc.join(timeout=5)
-        if proc.is_alive():
-            logger.warning("Monitoring process did not stop gracefully; terminating.")
-            proc.terminate()
-            proc.join(timeout=2)
-        if proc.is_alive():
-            logger.warning("Monitoring process still alive; killing.")
-            proc.kill()
-            proc.join(timeout=2)
-
     def _cleanup(
         self,
-        benchmark: VllmPerformanceBenchmark | None,
-        monitoring_proc: multiprocessing.Process | None,
-        stop_monitor_event: EventType | None,
+        benchmark: BenchmarkClient | None,
+        monitor: HardwareMonitor | None,
         api_server: APIServerManager | None,
         desc: str,
     ) -> None:
@@ -410,10 +285,9 @@ class BenchmarkRunner:
 
         Args:
             benchmark: Benchmark instance to stop and finalise (may be ``None``).
-            monitoring_proc: Monitoring subprocess to stop (may be ``None``).
-            stop_monitor_event: Event used to signal the monitoring loop.
+            monitor: Hardware monitor to stop (may be ``None``).
             api_server: API server to stop (may be ``None``).
-            desc: Passed through to :meth:`VllmPerformanceBenchmark.finish_info`.
+            desc: Passed through to :meth:`BenchmarkClient.finish_info`.
         """
         if benchmark is not None:
             try:
@@ -421,9 +295,9 @@ class BenchmarkRunner:
             except Exception:
                 logger.exception("Failed to stop benchmark.")
 
-        if monitoring_proc is not None and stop_monitor_event is not None:
+        if monitor is not None:
             try:
-                self._stop_monitor(monitoring_proc, stop_monitor_event)
+                monitor.stop()
             except Exception:
                 logger.exception("Failed to stop monitoring process.")
 

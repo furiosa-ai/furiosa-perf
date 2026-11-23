@@ -9,7 +9,7 @@ description = "LLM serving performance benchmark CLI for Furiosa NPU and NVIDIA 
 authors = [{name = "Furiosa AI Inc."}]
 license = {text = "Apache-2.0"}
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 keywords = ["benchmark", "llm", "furiosa", "npu", "gpu", "vllm", "performance"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -17,6 +17,8 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: System :: Benchmark",
@@ -27,14 +29,10 @@ dependencies = [
     "requests>=2.32.0",
     "PyYAML>=6.0.0",
     "pandas>=2.3.3",
-    "numpy>=2.2.6",
     "psutil>=5.9.0",
     "huggingface-hub",
     "pytablewriter",
     "uv>=0.4.0",
-    "jinja2>=3.1.0",
-    "plotly>=5.18.0",
-    "scipy>=1.10.0",
 ]
 
 [project.urls]
@@ -43,10 +41,11 @@ Repository = "https://github.com/furiosa-ai/furiosa-perf"
 "Bug Tracker" = "https://github.com/furiosa-ai/furiosa-perf/issues"
 
 [project.scripts]
-furiosa-perf = "furiosa_perf.cli.main:cli"
+furiosa-perf = "furiosa_perf.cli:cli"
 
 [project.optional-dependencies]
-furiosa-llm = ["furiosa-llm>=2026.2"]
+# Device monitoring on RNGD hosts; the server itself runs from the environment in the server config.
+rngd = ["furiosa-smi>=2026.4"]
 vllm = ["vllm>=0.20.1"]
 
 dev = [
@@ -62,7 +61,7 @@ dev = [
 
 [tool.mypy]
 packages = ["furiosa_perf"]
-python_version = "3.12"
+python_version = "3.10"
 ignore_missing_imports = true
 strict = true
 warn_unused_ignores = true
@@ -81,7 +80,7 @@ style = "google"
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "S", "NPY", "PTH"]
@@ -90,4 +89,4 @@ fixable = ["ALL"]
 
 [tool.black]
 line-length = 120
-target-version = ["py312"]
+target-version = ["py310"]

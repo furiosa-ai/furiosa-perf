@@ -1,0 +1,475 @@
+// Shared by every page: data loading, the page router, formatting and the metrics the pages compare.
+'use strict';
+
+// ---- data ----------------------------------------------------------------------------------------
+// data/index.json lists every run; data/runs/<id>.json holds one run's points (loaded on demand).
+const DATA = { index: null, points: {}, details: {} };  // details: how each run was measured (run.js)
+
+async function loadIndex() {
+  if (!DATA.index) {
+    const r = await fetch('data/index.json');
+    if (!r.ok) throw new Error('data/index.json: HTTP ' + r.status);
+    DATA.index = (await r.json()).runs;
+    // Featured models (featured.json next to the page, copied from the viewer with the rest; edit it there):
+    // { "default": [model, …], "<RNGD version>": [model, …] }. Optional: without it every list shows all models.
+    try { const f = await fetch('featured.json', { cache: 'no-cache' }); DATA.featured = f.ok ? await f.json() : {}; } catch (e) { DATA.featured = {}; }
+  }
+  return DATA.index;
+}
+// Featured models for an RNGD version: its own list, else the default one.
+function featuredFor(ver) { const f = DATA.featured || {}; return f[ver] || f.default || []; }
+
+// One point of a fixed-length run, with the fields the pages use. `raw` keeps every recorded value.
+function toPoint(raw) {
+  const out = raw['Output Throughput(tok/s)'], total = raw['Total Throughput(tok/s)'], seq = raw['Sequence Throughput(seq/s)'];
+  const generates = raw['Output Tokens'] > 0;  // embedding and rerank points have no output tokens
+  return {
+    isl: raw['Input Tokens'], osl: raw['Output Tokens'], conc: raw['Concurrent'], out: out, total: total,
+    image: raw['Image'] || '',  // image-text: the image sent with every request, e.g. 512x512
+    batch: raw['Inputs per Request'] || 1,  // embedding: texts per request; rerank: documents per query
+    seq: seq,  // embedding: texts/s; rerank: query-document pairs/s
+    tokText: total > 0 && seq > 0 ? total / seq : null,  // tokens the server counted per text or pair: below the ISL when it truncated
+    reqps: raw['Request Throughput(req/s)'], e2el50: raw['Median E2EL(s)'], e2el99: raw['P99 E2EL(s)'], duration: raw['active_s'],
+    ttft50: raw['Median TTFT(s)'], ttft99: raw['P99 TTFT(s)'], tpot50: raw['Median TPOT(ms)'], tpot99: raw['P99 TPOT(ms)'],
+    power: raw['mean_power'],
+    // Results of the presets judge each point (ok); older ones only tell a failed point by no throughput.
+    // A point that completed no request measured nothing whatever it says (rerank past the model's length).
+    ok: (raw.ok === undefined || !!raw.ok) && raw.completed !== 0 && (generates ? out > 0 : total > 0 || seq > 0),
+    raw: raw,
+  };
+}
+
+async function loadPoints(runs) {
+  await Promise.all(runs.filter((run) => !DATA.points[run.id]).map(async (run) => {
+    const r = await fetch('data/runs/' + encodeURIComponent(run.id) + '.json');
+    if (!r.ok) throw new Error(run.id + ': HTTP ' + r.status);
+    const d = await r.json();
+    DATA.points[run.id] = d.rows.map((row) => toPoint(Object.fromEntries(d.cols.map((c, i) => [c, row[i]]))));
+    DATA.details[run.id] = d.details || {};
+  }));
+}
+
+// A scenario of a fixed-length run: '<isl>/<osl>', or '<isl>/<osl>@<WxH>' when an image is sent with every request.
+// Embedding and rerank scenarios (no output) add what a request carries: '<isl>/0#<texts or documents>'.
+function shapeParts(s) {
+  const [rest, batch] = String(s || '0/0').split('#'), [pair, img] = rest.split('@'), [isl, osl] = pair.split('/').map(Number);
+  return { isl: isl, osl: osl, img: img || '', batch: +batch || 0 };
+}
+// '768/1024 · 512² image' — the image size as the preset names it (square) or WxH.
+function imageLabel(img) { const m = /^(\d+)x(\d+)$/.exec(img || ''); return !m ? img : m[1] === m[2] ? m[1] + '²' : m[1] + '×' + m[2]; }
+function shapeLabel(s, task) {
+  const x = shapeParts(s);
+  if (x.batch) return 'ISL ' + x.isl + ' · ' + (task === 'rerank' ? x.batch + ' documents / query' : x.batch === 1 ? '1 text / request' : x.batch + ' texts / request');
+  return x.isl + '/' + x.osl + (x.img ? ' · ' + imageLabel(x.img) + ' image' : '');
+}
+
+// Points of one scenario (ISL/OSL pair and, for image-text, the image; for embedding and rerank, the request size), by concurrency.
+function pointsAt(run, isl, osl, img) {
+  const scen = typeof isl === 'string' ? shapeParts(isl) : { isl: isl, osl: osl, img: img || '', batch: 0 };
+  return (DATA.points[run.id] || []).filter((p) => p.isl === scen.isl && p.osl === scen.osl && (p.image || '') === scen.img && (!scen.batch || p.batch === scen.batch)).sort((a, b) => a.conc - b.conc);
+}
+
+// The newest run of each identical measurement (same platform, layout, task, model and server options).
+function latestRuns(runs) {
+  const best = {};
+  runs.forEach((r) => {
+    const k = [r.hw, r.n, r.layout, r.backend, r.ver, r.kind, r.task, r.model, r.variant].join('|');
+    if (!best[k] || (r.date || '') > (best[k].date || '')) best[k] = r;
+  });
+  return Object.values(best);
+}
+
+// Fixed-length generation runs as configured (no --server-arg): the ones the Summary, Explorer and Releases pages compare.
+async function generationRuns() {
+  return latestRuns((await loadIndex()).filter((r) => r.kind === 'baseline' && !r.variant && GEN_TASKS[r.task]));
+}
+const GEN_TASKS = { 'text': 'Text', 'image-text': 'Image + text' };
+// Embedding and rerank runs as configured: no output tokens, so their own metrics (POOL_METRICS).
+const POOL_TASKS = { 'embedding': 'Embedding', 'rerank': 'Rerank' };
+async function poolingRuns() {
+  return latestRuns((await loadIndex()).filter((r) => r.kind === 'baseline' && !r.variant && POOL_TASKS[r.task]));
+}
+function isPooling(task) { return !!POOL_TASKS[task]; }
+// Every task the Explorer shows, in its order: generation first, then the pooling tasks (embed.js).
+const TASK_LABELS = { 'text': 'Text', 'image-text': 'Image + text', 'embedding': 'Embedding', 'rerank': 'Rerank' };
+
+
+function shapeOptions(runs) {
+  const set = {};
+  runs.forEach((r) => (r.shapes || []).forEach((s) => { set[s] = shapeParts(s); }));
+  const imgPx = (x) => x.img.split('x').reduce((a, b) => a * (+b || 1), 1);
+  // Image-text runs of the preset name their image; older ones (another image, other lengths) only clutter the list
+  // once there are preset results, and cannot be compared with them anyway.
+  const keys = Object.keys(set), withImage = keys.filter((s) => set[s].img);
+  return (withImage.length ? withImage : keys).sort((a, b) => set[a].isl - set[b].isl || set[a].osl - set[b].osl || imgPx(set[a]) - imgPx(set[b]) || set[a].batch - set[b].batch);
+}
+function pickShape(want, options) {
+  return options.indexOf(want) >= 0 ? want : options.indexOf('1024/1024') >= 0 ? '1024/1024' : options.indexOf('512/0#1') >= 0 ? '512/0#1' : options.indexOf('512/0#10') >= 0 ? '512/0#10' : options[0];
+}
+function shapeSelect(key, scen, scens, task) { return select(shapeParts(scens[0] || '').batch ? 'ISL · request' : 'ISL / OSL', key, scen, scens.map((s) => ({ v: s, label: shapeLabel(s, task) }))); }
+
+// ---- platforms -----------------------------------------------------------------------------------
+function verKey(v) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?/.exec(v) || [];
+  const pre = { a: 0, b: 1, rc: 2 }[m[4]];
+  return [+m[1] || 0, +m[2] || 0, +m[3] || 0, pre === undefined ? 3 : pre, +m[5] || 0];
+}
+function cmpVer(a, b) {
+  const x = verKey(a), y = verKey(b);
+  for (let i = 0; i < 5; i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return 0;
+}
+function family(hw) {
+  if (hw.indexOf('RNGD') >= 0) return 'rngd';
+  if (hw.indexOf('H200') >= 0) return 'h200';
+  if (hw.indexOf('H100') >= 0) return 'h100';
+  if (hw.indexOf('RTX') >= 0) return 'rtx';
+  return 'other';
+}
+const FAMILY_ORDER = { rngd: 0, h100: 1, h200: 2, rtx: 3, other: 4 };
+function famOrder(hw) { return FAMILY_ORDER[family(hw)]; }
+function backendLabel(b) { return b === 'vllm' ? 'vLLM' : b; }
+function platformKey(r) { return r.hw + '|' + r.backend + '|' + r.ver; }
+function platformLabel(k) { const p = k.split('|'); return p[0] + ' · ' + backendLabel(p[1]) + ' ' + p[2]; }
+function seriesLabel(r) { return r.hw + ' ×' + r.n + (r.layout ? ' ' + r.layout : '') + ' · ' + backendLabel(r.backend) + ' ' + r.ver; }
+// Newest version measured on each device: its series get the strong colour, older ones the light one.
+function newestVersions(runs) {
+  const newest = {};
+  runs.forEach((r) => { if (!newest[r.hw] || cmpVer(r.ver, newest[r.hw]) > 0) newest[r.hw] = r.ver; });
+  return newest;
+}
+
+// ---- metrics -------------------------------------------------------------------------------------
+// Power of a standard 8-card server, kW: RNGD and RTX PRO 6000 as in the published efficiency chart.
+// ponytail: H100/H200 assumed 10.2 kW (HGX), replace with the official figure when there is one.
+const SERVER_KW = { rngd: 3.0, rtx: 6.5, h100: 10.2, h200: 10.2 };
+const FAMILY_NAME = { rngd: 'RNGD', rtx: 'RTX PRO 6000', h100: 'H100', h200: 'H200' };
+// Server power of a device's family: the page's override (state kw_<family>, kept in the link) or the default above.
+function familyKw(fam) { const o = +STATE['kw_' + fam]; return o > 0 ? o : SERVER_KW[fam]; }
+function serverKw(hw) { return familyKw(family(hw)); }
+// One number input per family, for the metrics that divide by server power.
+function serverKwInputs(fams) {
+  // Folded to one line of values; open to edit. Opens by itself when a value differs from its default,
+  // which is then marked, so a page showing a non-default assumption says so.
+  fams = fams.filter((f) => SERVER_KW[f]);
+  if (!fams.length) return '';
+  const changed = (f) => familyKw(f) !== SERVER_KW[f];
+  const inputs = fams.map((f) => '<label class="ctl">' + esc(FAMILY_NAME[f]) + '<input type="number" min="0.1" step="0.1" data-k="kw_' + f
+    + '" data-num value="' + familyKw(f) + '"' + (changed(f) ? ' class="changed"' : '') + '></label>').join('');
+  const line = fams.map((f) => '<span' + (changed(f) ? ' class="changed"' : '') + '>' + esc(FAMILY_NAME[f]) + ' ' + familyKw(f) + '</span>').join(' · ');
+  const open = fams.some(changed) || NOTES_OPEN.kw;
+  return '<details class="kw-group" data-note="kw"' + (open ? ' open' : '') + '><summary><span class="kw-title">8-card server power · kW</span>'
+    + '<span class="kw-line">' + line + ' <span class="kw-edit">✎ Edit</span></span></summary><div class="kw-inputs">' + inputs + '</div></details>';
+}
+
+function okPts(pts) { return pts.filter((p) => p.ok); }
+function peakPoint(pts) { return okPts(pts).reduce((b, p) => (!b || p.out > b.out ? p : b), null); }
+function c1(pts) { return okPts(pts).filter((p) => p.conc === 1)[0]; }
+
+// Largest concurrency whose TPS/user is still >= slo, interpolated between measured points.
+// ge: the sweep's top concurrency still met it, so the true value is at least that.
+function usersAtSlo(pts, slo) {
+  const ok = okPts(pts), c = ok.map((p) => p.conc), t = ok.map((p) => p.out / p.conc);
+  if (!c.length || !(slo > 0)) return null;
+  if (!t.some((v) => v >= slo)) return { v: 0, ge: false };
+  if (t[t.length - 1] >= slo) return { v: c[c.length - 1], ge: true };
+  let best = null;
+  for (let i = 0; i < c.length - 1; i++) {
+    const y0 = t[i], y1 = t[i + 1];
+    if (y0 !== y1 && (y0 - slo) * (y1 - slo) <= 0) {
+      const x = c[i] + (slo - y0) / (y1 - y0) * (c[i + 1] - c[i]);
+      best = best === null ? x : Math.max(best, x);
+    }
+  }
+  return { v: best === null ? 0 : best, ge: false };
+}
+
+// Tokens per second per kW of an 8-card server, read off the throughput curve where TPS/user = slo.
+// A curve faster than the SLO even at its highest concurrency only gives a lower bound.
+function tpsPerKwAtSlo(pts, run, slo) {
+  const kw = serverKw(run.hw);
+  const c = okPts(pts).map((p) => ({ x: p.out / p.conc, y: p.out / run.n * 8 / kw })).sort((a, b) => a.x - b.x);
+  if (!kw || !c.length || !(slo > 0)) return null;
+  if (slo > c[c.length - 1].x) return { v: 0 };
+  if (slo < c[0].x) return { v: c[0].y, ge: true };
+  for (let i = 0; i < c.length - 1; i++) {
+    if (c[i].x <= slo && slo <= c[i + 1].x) return { v: c[i].y + (c[i + 1].y - c[i].y) * (slo - c[i].x) / ((c[i + 1].x - c[i].x) || 1) };
+  }
+  return { v: c[c.length - 1].y };
+}
+
+// Users at the SLO on an 8-card server (× 8 / devices measured), and on a rack of rackKw filled with
+// whole servers (the power left over stays unused). ge: the sweep's largest batch still met the SLO.
+const RACK_KW = 15;
+function usersPerServer(pts, run, slo) { const u = usersAtSlo(pts, slo); return u ? { v: u.v * 8 / run.n, ge: u.ge } : null; }
+function usersPerRack(pts, run, slo, rackKw) {
+  const kw = serverKw(run.hw), u = usersPerServer(pts, run, slo);
+  if (!kw || !u) return null;
+  const servers = Math.floor(rackKw / kw + 1e-9);
+  return { v: servers * u.v, ge: u.ge, servers: servers, perServer: u.v, kw: kw };
+}
+
+// One number per run and ISL/OSL pair, for the Summary and Releases pages: f(points, run, slo, rackKw).
+// bestN: a total scaled to a server, so the best device count of each side is compared. point: a measure
+// taken at every batch rather than reduced to one value.
+const METRICS = {
+  tpkw: { label: 'TPS per kW at SLO', title: 'Token Throughput per Kilowatt', higher: true, bestN: true, slo: true, kw: true, f: tpsPerKwAtSlo },
+  rack: { label: 'Users per rack at SLO', higher: true, bestN: true, slo: true, rack: true, kw: true, f: usersPerRack },
+  users: { label: 'Users at SLO · per 8-card server', higher: true, bestN: true, slo: true, f: usersPerServer },
+  // Measures with no one value per run: the pages list the models and draw `point` at every batch.
+  // f only picks each side's device count (the best at peak, or at b1).
+  tps: { label: 'Output TPS', higher: true, bestN: true, f: (pts) => { const p = peakPoint(pts); return p ? { v: p.out } : null; },
+    point: { label: 'Output TPS', f: (p) => p.out } },  // as measured on the run's devices
+  total: { label: 'Total TPS', higher: true, bestN: true, f: (pts) => { const p = peakPoint(pts); return p && p.total ? { v: p.total } : null; },
+    point: { label: 'Total TPS (input + output)', f: (p) => p.total } },  // as measured
+  out: { label: 'Output TPS · per 8-card server', higher: true, bestN: true, f: (pts, r) => { const p = peakPoint(pts); return p ? { v: p.out * 8 / r.n } : null; },
+    point: { label: 'Output TPS · per 8-card server', f: (p, r) => p.out * 8 / r.n } },
+  tpw: { label: 'Output TPS / W', higher: true, bestN: true, f: (pts) => { const p = peakPoint(pts); return p && p.power > 0 ? { v: p.out / p.power } : null; },
+    point: { label: 'Output TPS / W', f: (p) => (p.power > 0 ? p.out / p.power : null) } },
+  tpu: { label: 'TPS / User', higher: true, f: (pts) => { const p = c1(pts); return p ? { v: p.out } : null; }, point: { label: 'TPS / User', f: (p) => p.out / p.conc } },
+  tpot: { label: 'TPOT p50 (ms)', higher: false, f: (pts) => { const p = c1(pts); return p ? { v: p.tpot50 } : null; }, point: { label: 'TPOT p50 (ms)', f: (p) => p.tpot50 } },
+  ttft: { label: 'TTFT p50 (s)', higher: false, f: (pts) => { const p = c1(pts); return p ? { v: p.ttft50 } : null; }, point: { label: 'TTFT p50 (s)', f: (p) => p.ttft50 } },
+};
+// Embedding and rerank: input tokens per second (the server reports no usage for /v1/rerank: pairs/s × pair length),
+// documents scored per second, requests per second, and the whole-request latency.
+const poolTps = (p) => (p.total > 0 ? p.total : p.seq > 0 ? p.seq * p.isl : null);
+const peakBy = (pts, f) => okPts(pts).reduce((b, p) => (f(p) > 0 && (!b || f(p) > f(b)) ? p : b), null);
+const POOL_METRICS = {
+  etps: { label: 'Total TPS', higher: true, f: (pts) => { const p = peakBy(pts, poolTps); return p ? { v: poolTps(p) } : null; }, point: { label: 'Total TPS', f: poolTps } },
+  epairs: { label: 'Pairs / s', higher: true, only: 'rerank', f: (pts) => { const p = peakBy(pts, (q) => q.seq); return p ? { v: p.seq } : null; }, point: { label: 'Pairs / s', f: (p) => p.seq } },
+  erps: { label: 'RPS', higher: true, f: (pts) => { const p = peakBy(pts, (q) => q.reqps); return p ? { v: p.reqps } : null; }, point: { label: 'RPS', f: (p) => p.reqps } },
+  e2el: { label: 'E2EL p50 (s)', higher: false, f: (pts) => { const p = c1(pts); return p ? { v: p.e2el50 } : null; }, point: { label: 'E2EL p50 (s)', f: (p) => p.e2el50 } },
+  e2el99: { label: 'E2EL p99 (s)', higher: false, f: (pts) => { const p = c1(pts); return p ? { v: p.e2el99 } : null; }, point: { label: 'E2EL p99 (s)', f: (p) => p.e2el99 } },
+};
+function metricsFor(task) {
+  if (!isPooling(task)) return METRICS;
+  return Object.fromEntries(Object.entries(POOL_METRICS).filter(([k, m]) => !m.only || m.only === task));
+}
+// What an SLO metric was measured against, for titles: '' for the others.
+function metricBasis(M, slo, rackKw) { return (M.slo ? ' · SLO ' + slo + ' TPS/user' : '') + (M.rack ? ' · ' + rackKw + ' kW rack' : ''); }
+
+function median(xs) {
+  xs = xs.slice().sort((a, b) => a - b);
+  if (!xs.length) return null;
+  return xs.length % 2 ? xs[(xs.length - 1) / 2] : (xs[xs.length / 2 - 1] + xs[xs.length / 2]) / 2;
+}
+
+// ---- formatting ----------------------------------------------------------------------------------
+function fmt(v) {
+  if (v === null || v === undefined || !isFinite(v)) return '—';
+  if (v === 0) return '0';
+  const a = Math.abs(v);
+  if (a >= 1000 || Number.isInteger(v)) return Math.round(v).toLocaleString('en-US');
+  if (a >= 100) return v.toFixed(0);
+  if (a >= 10) return v.toFixed(1);
+  if (a >= 1) return v.toFixed(2);
+  return v.toFixed(3);
+}
+function day(iso) { return iso ? iso.slice(0, 10) : ''; }
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// <select> bound to state[key]; options are strings or {v, label}.
+function select(label, key, value, options, attrs) {
+  const opts = options.map((o) => {
+    const v = typeof o === 'object' ? o.v : o, l = typeof o === 'object' ? o.label : o;
+    return '<option value="' + esc(v) + '"' + (String(v) === String(value) ? ' selected' : '') + '>' + esc(l) + '</option>';
+  }).join('');
+  return '<label class="ctl">' + esc(label) + '<select data-k="' + key + '"' + (attrs || '') + '>' + opts + '</select></label>';
+}
+function rackInput(kw) {
+  return '<label class="ctl">Rack power · kW<input type="number" min="0.1" step="0.1" data-k="rack" data-num value="' + kw + '"></label>';
+}
+function sloInput(slo) {
+  return '<label class="ctl">SLO · tok/s/user<input type="number" min="1" step="1" data-k="slo" data-num value="' + slo + '"></label>';
+}
+function kpi(label, value, color) {
+  return '<div class="kpi"><div class="label">' + esc(label) + '</div><div class="value"' + (color ? ' style="color:' + color + '"' : '') + '>' + value + '</div></div>';
+}
+
+// ---- router --------------------------------------------------------------------------------------
+// The page and its controls live in the URL (#explorer?model=…&scen=…), so a view can be linked.
+// Pages register an async render(state) that returns HTML; changing a control re-renders the page.
+const PAGES = {};
+let STATE = {}, PAGE = 'summary', RENDERING = 0;
+
+function readHash() {
+  const [page, query] = location.hash.replace(/^#/, '').split('?');
+  // Server power (kw_<family>) follows the viewer from page to page: a link without it keeps the values set before.
+  const kept = Object.fromEntries(Object.entries(STATE).filter(([k]) => k.indexOf('kw_') === 0));
+  PAGE = PAGES[page] ? page : 'summary';
+  STATE = Object.fromEntries(new URLSearchParams(query || ''));
+  ['slo'].forEach((k) => { if (STATE[k] !== undefined) STATE[k] = +STATE[k]; });
+  const carried = Object.keys(kept).filter((k) => STATE[k] === undefined);
+  if (carried.length) {
+    carried.forEach((k) => { STATE[k] = kept[k]; });
+    history.replaceState(null, '', '#' + PAGE + '?' + new URLSearchParams(STATE).toString());
+  }
+}
+function setState(patch) {
+  Object.assign(STATE, patch);
+  Object.keys(STATE).forEach((k) => { if (STATE[k] === undefined || STATE[k] === null) delete STATE[k]; });
+  const q = new URLSearchParams(STATE).toString();
+  history.replaceState(null, '', '#' + PAGE + (q ? '?' + q : ''));
+  render();
+}
+async function render() {
+  const ticket = ++RENDERING, app = document.getElementById('app');
+  document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + PAGE));
+  try {
+    const html = await PAGES[PAGE](STATE);
+    if (ticket === RENDERING) app.innerHTML = html;  // a newer render started while loading: drop this one
+  } catch (e) {
+    if (ticket === RENDERING) app.innerHTML = '<div class="status">Could not load the data: ' + esc(e.message) + '</div>';
+  }
+}
+// The measure of a single-point metric (M.point) at every batch, one bar per series in each batch's group,
+// with series[ratio[0]]'s multiple over series[ratio[1]] above the group (> 1: better, whichever way the
+// measure improves). series: [{ name, color, run }]; failed points are left out.
+// A multiple k (> 1: the first side is better) as text. Lower-is-better measures (latency) read as
+// "2.31× faster" / "1.25× slower" rather than a bare inverse ratio that reads like "higher is better".
+function multText(k, higher) {
+  if (higher || Math.abs(k - 1) < 0.005) return k.toFixed(2) + '×';  // no "faster"/"slower" for a change that rounds away
+  return k >= 1 ? k.toFixed(2) + '× faster' : (1 / k).toFixed(2) + '× slower';
+}
+function batchChart(M, series, ratio, scen) {
+  const val = (s, c) => {
+    const p = pointsAt(s.run, scen).filter((q) => q.ok && q.conc === c)[0], v = p ? M.point.f(p, s.run) : null;
+    return v === null || v === undefined || !isFinite(v) ? null : v;
+  };
+  const concs = [...new Set(series.flatMap((s) => pointsAt(s.run, scen).map((p) => p.conc)))].sort((a, b) => a - b);
+  const rows = concs.map((c) => ({ c: c, v: series.map((s) => val(s, c)) })).filter((x) => x.v.some((v) => v !== null));
+  if (!rows.length) return '<div class="empty">No measured batches.</div>';
+  const W = 900, H = 230, L = 70, R = 880, T = 30, B = 190, yt = niceTicks(Math.max(...rows.flatMap((x) => x.v.map((v) => v || 0))) * 1.12);
+  const y = (v) => B - v / yt.top * (B - T), slot = (R - L) / rows.length, bw = Math.min(26, slot * 0.64 / series.length);
+  let s = '';
+  yt.list.forEach((v) => { s += '<line x1="' + L + '" x2="' + R + '" y1="' + y(v) + '" y2="' + y(v) + '" stroke="var(--grid)"/><text x="' + (L - 8) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + fmt(v) + '</text>'; });
+  rows.forEach((x, i) => {
+    const cx = L + slot * (i + 0.5), x0 = cx - bw * series.length / 2;
+    const a = x.v[ratio[0]], b = x.v[ratio[1]], k = a > 0 && b > 0 ? (M.higher ? a / b : b / a) : null;
+    // The batch's values show on hover (data-tip), over a hit area as wide as its slot.
+    const tip = 'b' + x.c + '\n' + series.map((sr, j) => sr.name + '  ' + (x.v[j] === null ? '—' : fmt(x.v[j]))).join('\n') + (k === null ? '' : '\n' + multText(k, M.higher));
+    s += '<g class="bgrp" data-tip="' + esc(tip) + '"><rect class="hit" x="' + (cx - slot / 2) + '" y="' + T + '" width="' + slot + '" height="' + (B - T) + '" fill="transparent"/>';
+    x.v.forEach((v, j) => {
+      if (v !== null) s += '<rect x="' + (x0 + bw * j + 1) + '" y="' + y(v) + '" width="' + (bw - 2) + '" height="' + (B - y(v)) + '" fill="' + series[j].color + '"/>';
+    });
+    s += '</g>';
+    const top = Math.min(...x.v.map((v) => (v === null ? B : y(v))));
+    if (k !== null) s += '<text class="mult-s" x="' + cx + '" y="' + (top - 8) + '" text-anchor="middle" style="fill:' + (k > 1.02 ? 'var(--accent)' : k < 0.98 ? 'var(--muted)' : 'var(--text)') + '">' + multText(k, M.higher) + '</text>';  // ±2%: no change
+    s += '<text x="' + cx + '" y="' + (B + 18) + '" text-anchor="middle">b' + x.c + '</text>';
+  });
+  s += '<line x1="' + L + '" x2="' + R + '" y1="' + B + '" y2="' + B + '" stroke="var(--faint)"/>'
+    + '<text class="axis-title" transform="translate(14 ' + (T + B) / 2 + ') rotate(-90)" text-anchor="middle">' + esc(M.point.label.toUpperCase()) + '</text>'
+    + '<text class="axis-title" x="' + (L + R) / 2 + '" y="' + (H - 4) + '" text-anchor="middle">BATCH (CONCURRENCY)</text>';
+  const legend = '<div class="legend">' + series.map((x) => '<span><span class="swatch" style="background:' + x.color + '"></span>' + esc(x.name) + '</span>').join('')
+    + (series.length > 1 ? '<span class="faint">× = ' + esc(series[ratio[0]].name) + ' vs ' + esc(series[ratio[1]].name) + '</span>' : '') + (M.higher ? '' : '<span class="faint" style="margin-left:auto">lower is better</span>') + '</div>';
+  return legend + '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="' + esc(M.point.label) + ' by batch">' + s + '</svg>';
+}
+
+// [data-tip]: its text in a box that follows the pointer.
+function showTip(e) {
+  let box = document.getElementById('tip');
+  const el = e.target.closest && e.target.closest('[data-tip]');
+  if (!el) { if (box) box.hidden = true; return; }
+  if (!box) { box = document.createElement('div'); box.id = 'tip'; box.className = 'tip'; document.body.appendChild(box); }
+  box.textContent = el.dataset.tip;
+  box.hidden = false;
+  const left = e.clientX + 16 + box.offsetWidth > innerWidth ? e.clientX - 16 - box.offsetWidth : e.clientX + 16;
+  box.style.left = left + scrollX + 'px';
+  box.style.top = e.clientY + scrollY - box.offsetHeight / 2 + 'px';
+}
+
+// A caption with the conditions always shown and the full explanation folded behind "How this is calculated".
+// Open/closed is kept across re-renders of this visit only, never in the link: a shared page starts folded.
+const NOTES_OPEN = {};
+function note(key, short, long) {
+  return '<div class="cap-note">' + (short ? '<p class="caption">' + esc(short) + '</p>' : '')
+    + (long ? '<details class="more-note" data-note="' + key + '"' + (NOTES_OPEN[key] ? ' open' : '') + '><summary>ⓘ How this is calculated</summary><p class="caption">' + esc(long) + '</p></details>' : '') + '</div>';
+}
+
+// ---- shared page pieces (RNGD vs GPU, Releases) ------------------------------------------------
+// Side panel of grouped controls next to the page body (sticky on wide screens, style.css).
+function sideGroup(name, body) { return '<div class="side-group"><div class="side-title">' + name + '</div>' + body + '</div>'; }
+function sidePage(title, side, body) {
+  return '<h1>' + esc(title) + '</h1><div class="with-side"><aside class="side">' + side + '</aside><div class="side-main">' + body + '</div></div>';
+}
+// How many models a list shows (best first), so a meeting can stop at the strong ones; a button shows the next step.
+// 'featured' (the default when the page has a featured list) shows only those models, best first.
+const SHOW_STEPS = [10, 20, 50];
+function showOf(st, featured) {
+  if (SHOW_STEPS.indexOf(+st.show) >= 0) return +st.show;
+  return st.show === 'all' || !featured.length ? 'all' : 'featured';
+}
+function showSelect(show, featured) {
+  return select('Show', 'show', String(show), (featured.length ? [{ v: 'featured', label: 'Featured models' }] : [])
+    .concat(SHOW_STEPS.map((n) => ({ v: String(n), label: 'Top ' + n }))).concat([{ v: 'all', label: 'All models' }]));
+}
+// Trim a ranked list (in place) to what Show asks for; items carry .model.
+function applyShow(list, show, featured) {
+  if (show === 'featured') { const keep = list.filter((x) => featured.indexOf(x.model) >= 0); list.splice(0, list.length, ...keep); }
+  else if (show !== 'all') list.splice(show);
+}
+function moreButton(shown, total, show) {
+  if (shown >= total) return '';
+  const next = show === 'featured' ? null : SHOW_STEPS.filter((n) => n > shown && n < total)[0];
+  return '<div class="more"><button class="button show-more" data-v="' + (next || 'all') + '">Show ' + (next ? 'top ' + next : 'all ' + total) + ' · ' + (total - shown) + ' more</button></div>';
+}
+// A metric in plain words: [title, how it is measured]. Pages add their own conditions and reading notes.
+function metricText(metric, M, slo, rackKw) {
+  const atSlo = 'every user at ≥ ' + slo + ' tok/s';
+  return {
+    etps: ['Input throughput', 'Input tokens/s at the best concurrency; there are no output tokens.'],
+    epairs: ['Documents scored per second', 'Query-document pairs/s at the best concurrency.'],
+    erps: ['Requests per second', 'Requests completed per second at the best concurrency.'],
+    e2el: ['Request latency', 'Median time from request to full response at concurrency 1, lower is better.'],
+    e2el99: ['Request latency, p99', '99th-percentile time from request to full response at concurrency 1, lower is better.'],
+    tpkw: ['Throughput per kW, ' + atSlo, 'Output tokens/s per kW of an 8-card server, read at the batch where each user still gets ' + slo + ' tok/s.'],
+    rack: ['Users per ' + rackKw + ' kW rack, ' + atSlo, 'Whole 8-card servers that fit in the rack × users per server at the SLO (servers rounded down).'],
+    users: ['Users per 8-card server, ' + atSlo, 'Most concurrent users still at ≥ ' + slo + ' tok/s, scaled to 8 cards (× 8 ÷ devices measured).'],
+    tps: ['Output throughput', 'Output tokens/s as measured on the run\'s devices.'],
+    total: ['Total throughput (input + output)', 'Input + output tokens/s as measured.'],
+    out: ['Output throughput per 8-card server', 'Output tokens/s × 8 ÷ devices measured.'],
+    tpw: ['Output tokens per watt', 'Output tokens/s ÷ card power measured during the run.'],
+    tpu: ['Speed each user sees', 'Output tokens/s per request (output ÷ batch).'],
+    tpot: ['Time per output token', 'Median TPOT in ms, lower is better.'],
+    ttft: ['Time to first token', 'Median TTFT in s, lower is better.'],
+  }[metric] || [M.title || M.label, ''];
+}
+// How much better run b is than run a on a per-batch metric (M.point): the geometric mean, over the batches both
+// measured, of b's value over a's (oriented so > 1 is better). The peak or batch 1 alone misses a release that
+// moved the middle batches. null when they share no batch.
+function batchRatio(M, scen, a, b) {
+  const at = (run) => Object.fromEntries(pointsAt(run, scen).filter((p) => p.ok).map((p) => [p.conc, M.point.f(p, run)]));
+  const va = at(a), vb = at(b), logs = [];
+  Object.keys(va).forEach((c) => { const x = va[c], y = vb[c]; if (x > 0 && y > 0) logs.push(Math.log(M.higher ? y / x : x / y)); });
+  return logs.length ? Math.exp(logs.reduce((s, v) => s + v, 0) / logs.length) : null;
+}
+// Single-value read of a point metric: at the peak for throughputs, at batch 1 for per-user speed and latency.
+function pointRead(metric) { return ['tpu', 'tpot', 'ttft', 'e2el', 'e2el99'].indexOf(metric) >= 0 ? 'batch 1' : 'the peak'; }
+
+// One-of-many picker drawn as tiles (radio buttons bound to state[key], so the pick is kept in the link).
+// items: [{ key, name, sub }]; returns the picked key (state[key] if it is one of the items, else dflt).
+function pickedKey(st, key, items, dflt) { return items.some((x) => x.key === st[key]) ? st[key] : dflt; }
+function pickTiles(key, items, pick) {
+  return '<div class="tiles">' + items.map((x) => {
+    const on = x.key === pick;
+    return '<label class="tile' + (on ? ' on' : '') + '"><input type="radio" name="' + key + '" data-k="' + key + '" value="' + esc(x.key) + '"' + (on ? ' checked' : '') + '>'
+      + '<span class="name">' + esc(x.name) + '</span><span class="sub">' + esc(x.sub || '') + '</span></label>';
+  }).join('') + '</div>';
+}
+
+function start() {
+  const app = document.getElementById('app');
+  app.addEventListener('change', (e) => {
+    const el = e.target;
+    if (el.dataset.k) setState({ [el.dataset.k]: el.dataset.num !== undefined ? (+el.value > 0 ? +el.value : undefined) : el.value });
+    else if (el.dataset.toggle !== undefined) PAGES[PAGE].toggle(el.dataset.toggle, el.checked);
+  });
+  document.addEventListener('pointermove', showTip);
+  document.addEventListener('toggle', (e) => { if (e.target.dataset && e.target.dataset.note) NOTES_OPEN[e.target.dataset.note] = e.target.open; }, true);  // folded notes stay open across re-renders
+  document.addEventListener('click', (e) => { if (e.target.classList && e.target.classList.contains('show-more')) setState({ show: e.target.dataset.v }); });  // Show more (moreButton)
+  window.addEventListener('hashchange', () => { readHash(); render(); });
+  readHash();
+  render();
+}

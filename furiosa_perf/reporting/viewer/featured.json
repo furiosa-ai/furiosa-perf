@@ -1,0 +1,9 @@
+{
+  "default": [
+    "gemma-4-31B-it-FP8-block",
+    "Qwen3.6-35B-A3B-FP8",
+    "Qwen3.6-27B-FP8",
+    "solar-mini4-35B-FP8",
+    "gpt-oss-120b"
+  ]
+}

@@ -1,0 +1,33 @@
+# Fixed-length baseline for text generation: random prompts of a fixed input length,
+# exactly OSL output tokens each (ignore-eos), closed-loop concurrency sweep.
+kind: baseline
+task: text
+client: vllm-bench
+
+# Applied over the server config.
+server:
+  no-enable-prefix-caching: true  # random prompts must not hit a cache
+  reasoning-parser: null  # keep thinking tokens in `content`, which is what the client counts
+
+# `vllm bench serve` options shared by every point (same names as its CLI).
+args:
+  backend: vllm  # request format of the client, not the serving backend
+  dataset-name: random
+  random-range-ratio: 0
+  ignore-eos: true
+  temperature: 0
+  trust-remote-code: true
+  percentile-metrics: ttft,tpot,itl,e2el
+  metric-percentiles: 25,50,75,90,95,99
+
+# One point per combination; list values are expanded.
+matrix:
+  - {random-input-len: 128, random-output-len: 128, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256, 512]}
+  - {random-input-len: 512, random-output-len: 512, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256, 512]}
+  - {random-input-len: 1024, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256]}
+  - {random-input-len: 2048, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64, 128, 256]}
+  - {random-input-len: 7168, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32, 64]}
+  - {random-input-len: 15360, random-output-len: 1024, max-concurrency: [1, 4, 8, 16, 32]}
+  - {random-input-len: 31744, random-output-len: 1024, max-concurrency: [1, 4, 8, 16]}
+  - {random-input-len: 64512, random-output-len: 1024, max-concurrency: [1, 4, 8]}
+  - {random-input-len: 130048, random-output-len: 1024, max-concurrency: [1, 4]}

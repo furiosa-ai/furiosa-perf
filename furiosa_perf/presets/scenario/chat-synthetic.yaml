@@ -1,0 +1,58 @@
+# Service scenario of a general chatbot with synthetic conversations.
+#
+# Every user holds one conversation at a time: a system prompt shared by all users,
+# a context of their own, then several turns separated by think time. Each turn
+# carries the conversation so far, including the replies the server generated, so
+# the prefix cache is exercised as in a real chat service. A point's `concurrency`
+# is the number of users talking at once; a bisection finds the most users whose
+# point meets the SLO. To sweep fixed user counts instead, replace `search` with
+# `matrix: [{concurrency: [8, 16, 32, ...]}]`.
+kind: scenario
+task: chat
+client: aiperf
+
+# A fresh server for every point, so no point inherits the previous point's prefix
+# cache or load; the warm-up below then primes it before measuring.
+restart-server: per-point
+
+# Applied over the server config.
+server:
+  enable-prefix-caching: true  # conversation history is re-sent every turn
+  max-model-len: 8192  # longest conversations here stay under ~6k tokens
+  default-chat-template-kwargs: {enable_thinking: false}  # plain chat replies from thinking models
+
+# p95 limits a point must meet; also sent to AIPerf as per-request goodput thresholds.
+slo:
+  ttft_p95_ms: 3000
+  tpot_p95_ms: 50
+
+# `aiperf profile` options shared by every point (same names as its CLI).
+args:
+  endpoint-type: chat
+  streaming: true
+  shared-system-prompt-length: 1000  # tokens, identical for every user
+  user-context-prompt-length: 500  # tokens, unique per conversation
+  num-dataset-entries: 1000  # distinct user contexts and messages
+  isl: 150  # tokens per user message
+  isl-stddev: 50
+  osl: 300  # tokens per reply
+  osl-stddev: 100
+  extra-inputs: {ignore_eos: true}  # replies have the drawn length; synthetic text gives the model no natural end
+  session-turns-mean: 5
+  session-turns-stddev: 2
+  session-turn-delay-mean: 10000  # ms of think time between a reply and the next message
+  session-turn-delay-stddev: 5000
+  warmup-request-count: 32  # requests after the (re)start that are not measured
+  warmup-concurrency: 8
+  concurrency-ramp-duration: 60  # s: users join over a minute instead of all at once
+  benchmark-duration: 300  # s of measurement per point
+  benchmark-grace-period: 60
+  random-seed: 0
+
+# Bisect the number of users talking at once for the most that meets the SLO.
+# min should pass and max should fail; override them per run with --search-min/--search-max.
+search:
+  key: concurrency
+  min: 8
+  max: 256
+  step: 4  # stop when the passing and failing user counts are 4 apart

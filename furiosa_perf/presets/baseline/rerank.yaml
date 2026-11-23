@@ -1,0 +1,32 @@
+# Fixed-length baseline for reranker models over every pair length the models take: one query
+# with N candidate documents per request, as a RAG retriever hands them over, as fast as the
+# server scores them (no request rate: one request is tens of thousands of tokens, so a user's
+# rate means nothing). 10 requests per concurrency; concurrency narrows as the tokens per
+# request (documents x pair length) grow.
+kind: baseline
+task: rerank
+client: vllm-bench
+
+server:
+  no-enable-prefix-caching: true
+
+args:
+  backend: vllm-rerank
+  endpoint: /v1/rerank
+  dataset-name: random-rerank
+  trust-remote-code: true
+  percentile-metrics: e2el
+  metric-percentiles: 25,50,75,90,95,99
+  prompts-per-concurrency: 10  # requests per concurrency (num-prompts counts documents)
+
+# random-input-len is the query + document pair the model scores (vllm bench splits it in half:
+# 512 = a 256-token query against 256-token documents; a cross-encoder's cost is the pair).
+# random-batch-size is documents per query: 10 a small candidate set, 30-50 the usual service
+# top-k, 100 the BEIR/MTEB standard. Lengths are the attention buckets of the RNGD builds.
+# furiosa-llm's /v1/rerank returns no usage, so read pairs/s (input sequences/s) and E2EL per query.
+matrix:
+  - {random-input-len: [256, 512, 1024], random-batch-size: [10, 30, 50], max-concurrency: [1, 4, 16, 64]}
+  - {random-input-len: [256, 512, 1024], random-batch-size: 100, max-concurrency: [1, 4, 16]}
+  - {random-input-len: [2048, 4096], random-batch-size: [10, 30, 50], max-concurrency: [1, 4, 16]}
+  - {random-input-len: [8192, 16384], random-batch-size: 10, max-concurrency: [1, 4]}
+  - {random-input-len: 32768, random-batch-size: 10, max-concurrency: 1}
