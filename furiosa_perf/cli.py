@@ -109,7 +109,7 @@ def baseline(**options: Any) -> None:
     help="Override the upper end of the preset's capacity search.",
 )
 def scenario(search_min: int | None, search_max: int | None, **options: Any) -> None:
-    """Service scenario: PRESET is chat-synthetic, chat-mooncake, or a preset file."""
+    """Service scenario: PRESET is chat-synthetic, chat-mooncake, toolagent-mooncake, or a preset file."""
     _run("scenario", search_min=search_min, search_max=search_max, **options)
 
 

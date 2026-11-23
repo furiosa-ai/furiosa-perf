@@ -19,7 +19,7 @@ See [Benchmark Methodology](examples/BENCHMARK.md) for a detailed explanation of
 
 - **End-to-end automation** — server launch, benchmark execution, and teardown in one command
 - **Hardware monitoring** — power, temperature, utilization (NPU/GPU), host CPU/memory, and server `/metrics`, logged to CSV
-- **Presets** — `run baseline` with bundled `text`, `image-text`, `embedding`, `rerank`; `run scenario` with `chat-synthetic`, `chat-mooncake`; or your own YAML
+- **Presets** — `run baseline` with bundled `text`, `image-text`, `embedding`, `rerank`; `run scenario` with `chat-synthetic`, `chat-mooncake`, `toolagent-mooncake`; or your own YAML
 - **Flexible sweeps** — define token lengths and concurrency lists in a single YAML; `max_concurrency` can be a list and is auto-expanded
 
 ---
@@ -217,6 +217,7 @@ A preset says what to measure: which client, which server options the measuremen
 | `run baseline` | `rerank` | Reranking, 5 documents per query, 256 to 8k tokens |
 | `run scenario` | `chat-synthetic` | General chatbot: multi-turn synthetic conversations, capacity search over 8 to 256 users, SLO TTFT p95 ≤ 3 s and TPOT p95 ≤ 50 ms |
 | `run scenario` | `chat-mooncake` | Production chatbot trace (Kimi, Mooncake FAST'25 conversation trace) replayed at its recorded times, capacity search over 5 to 100 % of its recorded speed, same SLO |
+| `run scenario` | `toolagent-mooncake` | Production tool-and-agent trace (Kimi, Mooncake FAST'25 tool&agent trace): fixed tool prompts of about 4.6k tokens shared by most requests and replies mostly under 30 tokens, replayed at its recorded times, same capacity search and SLO as `chat-mooncake` |
 
 The bundled files are in [`furiosa_perf/presets/`](furiosa_perf/presets); copy one to change the points and pass the file instead of the name. A preset's `kind` must match the command. The format:
 
