@@ -215,21 +215,23 @@ class AiperfClient(BenchmarkClient):
         return command
 
     def _write_point_trace(self, point: dict[str, Any], point_dir: Path) -> None:
-        """Write the point's trace file: warm-up requests first, then its slice stretched to its replay speed."""
+        """Write the point's trace file: warm-up requests first, then its slice (the sessions kept, stretched to its replay speed)."""
         trace = self.preset.trace
         if self._trace_rows is None:
             self._trace_rows = load_trace(fetch_trace(str(trace["source"]), str(trace["sha256"])))
         max_total = trace.get("max-total-tokens") or self.preset.server.get("max-model-len")
         max_total = int(max_total) if max_total else None
         start = float(point.get("trace-start", 0))
+        sessions = int(point.get("trace-session-pct", 100))
         rows, window = scale_trace(
             self._trace_rows,
-            int(point["trace-speed-pct"]),
+            int(point.get("trace-speed-pct", 100)),
             float(point.get("trace-duration", DEFAULT_TRACE_DURATION_S)),
             max_total,
             start_seconds=start,
+            session_pct=sessions,
         )
-        warmup = warmup_rows(self._trace_rows, start, float(point.get("trace-warmup", 0)), max_total)
+        warmup = warmup_rows(self._trace_rows, start, float(point.get("trace-warmup", 0)), max_total, session_pct=sessions)
         offset = warmup[-1]["timestamp"] + 1 if warmup else 0
         write_trace(warmup + [{**r, "timestamp": r["timestamp"] + offset} for r in rows], point_dir / POINT_TRACE_FILE)
         window.warmup_requests = len(warmup)
@@ -257,9 +259,11 @@ class AiperfClient(BenchmarkClient):
         if self.preset.trace:
             window = self._windows.get(point_name(point))
             row = {
-                "Trace Speed(%)": point.get("trace-speed-pct"),
+                "Trace Speed(%)": point.get("trace-speed-pct", 100),
+                "Trace Sessions(%)": point.get("trace-session-pct", 100),
                 "Offered(req/s)": window.offered_req_per_s if window else None,
                 "Trace Requests": window.requests if window else None,
+                "Trace Sessions": window.sessions if window else None,
                 "Dropped Too Long": window.dropped_too_long if window else None,
                 "Warm-up Requests": window.warmup_requests if window else None,
                 **row,
@@ -273,15 +277,19 @@ class AiperfClient(BenchmarkClient):
     def run_summary(self) -> dict[str, Any]:
         """``capacity``: the SLO, the highest load that met it and, after a search, how it was found.
 
-        The load is ``max_users`` for chat sessions, or ``max_speed_pct`` (percent of the
-        recorded speed) for a trace replay, which also records the trace it replayed.
+        The load is ``max_users`` for chat sessions; for a trace replay it is ``max_session_pct``
+        (share of the trace's sessions) when that is what the search steps through, else
+        ``max_speed_pct`` (percent of the recorded speed), and the trace replayed is recorded too.
         """
         if not self.preset.slo:
             return {}
         rows = self.total_results["results"]
         capacity: dict[str, Any] = {"slo": self.preset.slo}
         if self.preset.trace:
-            capacity["max_speed_pct"] = max_load_within_slo(rows, "Trace Speed(%)")
+            if self.preset.search is not None and self.preset.search.key == "trace-session-pct":
+                capacity["max_session_pct"] = max_load_within_slo(rows, "Trace Sessions(%)")
+            else:
+                capacity["max_speed_pct"] = max_load_within_slo(rows, "Trace Speed(%)")
             capacity["trace"] = dict(self.preset.trace)
         else:
             capacity["max_users"] = max_load_within_slo(rows, "Users")

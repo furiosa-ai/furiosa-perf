@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from furiosa_perf.clients.aiperf import AiperfClient, max_load_within_slo
-from furiosa_perf.clients.traces import fetch_trace, load_trace, scale_trace, warmup_rows
+from furiosa_perf.clients.traces import fetch_trace, load_trace, scale_trace, session_keys, warmup_rows
 from furiosa_perf.spec import load_preset
 
 ROWS = [
@@ -107,3 +107,46 @@ def test_a_warmed_point_replays_one_file_in_two_runs(tmp_path: Path, monkeypatch
     assert warmup[warmup.index("--artifact-dir") + 1] == str(tmp_path / "warmup")
     assert "--benchmark-grace-period" not in warmup and "--goodput" not in warmup
     assert warmup[warmup.index("--random-seed") + 1] == command[command.index("--random-seed") + 1]
+
+
+# Two conversations (own blocks 1 and 2) behind a shared system prompt (block 0), a second turn each, and a
+# request that is nothing but shared blocks.
+SESSION_ROWS = [
+    {"timestamp": 0, "input_length": 1000, "output_length": 10, "hash_ids": [0, 1]},
+    {"timestamp": 100, "input_length": 1000, "output_length": 10, "hash_ids": [0, 2]},
+    {"timestamp": 200, "input_length": 500, "output_length": 10, "hash_ids": [0]},
+    {"timestamp": 300, "input_length": 1500, "output_length": 10, "hash_ids": [0, 1, 3]},
+    {"timestamp": 400, "input_length": 1500, "output_length": 10, "hash_ids": [0, 2, 4]},
+] + [  # 200 one-turn conversations, so a block seen twice is below the shared-prompt share and their keys stay off 0 and 1 mod 100
+    {"timestamp": 500 + i, "input_length": 1000, "output_length": 10, "hash_ids": [0, 10 + i % 90 + 100 * (i // 90)]}
+    for i in range(200)
+]
+
+
+def test_session_keys_skip_the_shared_prompt() -> None:
+    """A session is told by its first own block; both turns of a conversation get the same key."""
+    keys = session_keys(SESSION_ROWS)
+
+    assert keys[0] == keys[3] == 1
+    assert keys[1] == keys[4] == 2
+    assert keys[2] == 0  # only shared blocks: keyed by its last block
+
+
+def test_a_session_share_keeps_whole_conversations_and_nests() -> None:
+    """Keeping 2 % of the sessions keeps every turn of the sessions chosen; a larger share is a superset."""
+    small, window = scale_trace(SESSION_ROWS, speed_pct=100, wall_seconds=10, max_total_tokens=None, session_pct=2)
+    large, _ = scale_trace(SESSION_ROWS, speed_pct=100, wall_seconds=10, max_total_tokens=None, session_pct=50)
+    everything, full = scale_trace(SESSION_ROWS, speed_pct=100, wall_seconds=10, max_total_tokens=None)
+
+    assert [r["hash_ids"] for r in small] == [[0, 1], [0], [0, 1, 3]]  # keys 1 and 0 fall in the first 2 %
+    assert window.session_pct == 2 and window.sessions == 2
+    assert {tuple(r["hash_ids"]) for r in small} <= {tuple(r["hash_ids"]) for r in large}
+    assert len(everything) == len(SESSION_ROWS) and full.session_pct == 100
+    assert [r["timestamp"] for r in small] == [0, 200, 300]  # recorded timing kept
+
+
+def test_warm_up_covers_only_the_sampled_sessions() -> None:
+    """The cache is warmed for the sessions measured, not for the ones left out."""
+    warmup = warmup_rows(SESSION_ROWS, start_seconds=0.5, warmup_seconds=0.5, max_total_tokens=None, session_pct=2)
+
+    assert [r["hash_ids"] for r in warmup] == [[0, 1], [0], [0, 1, 3]]

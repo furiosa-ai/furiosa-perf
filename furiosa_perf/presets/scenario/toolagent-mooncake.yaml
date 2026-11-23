@@ -5,9 +5,9 @@
 # short query, and a short reply (half of them under 30 tokens): almost pure prefill
 # with prefix reuse right away, where the conversation trace reuses blocks minutes apart.
 #
-# Same machinery as chat-mooncake: hash ids become fixed 512-token blocks, requests
-# are sent at their recorded times stretched to a fraction of the recorded speed, and
-# a bisection finds the highest speed whose point meets the SLO.
+# Same machinery and SLO as chat-mooncake: hash ids become fixed 512-token blocks,
+# requests are sent at their recorded times, the load is the share of the trace's
+# sessions replayed, and a bisection finds the highest share whose point meets the SLO.
 kind: scenario
 task: toolagent-mooncake
 client: aiperf
@@ -16,7 +16,7 @@ trace:
   source: https://raw.githubusercontent.com/kvcache-ai/Mooncake/main/FAST25-release/traces/toolagent_trace.jsonl
   sha256: 48a2db1a13d3bc05e6330140c64f604ba366df20d3c9e128b5c35a01c1fa5f71
   license: Apache-2.0 (kvcache-ai/Mooncake, FAST'25 trace release)
-  replay: recorded timestamps, stretched by 100 / speed
+  replay: recorded timestamps; a share of the sessions, chosen by their first own block
 
 restart-server: per-point
 
@@ -26,8 +26,8 @@ server:
   default-chat-template-kwargs: {enable_thinking: false}
 
 slo:
-  ttft_p95_ms: 3000
-  tpot_p95_ms: 50
+  ttft_p95_ms: 30000
+  tpot_p95_ms: 100
 
 args:
   endpoint-type: chat
@@ -35,12 +35,12 @@ args:
   extra-inputs: {ignore_eos: true}
   trace-duration: 600
   trace-start: 1800  # same slice as chat-mooncake, so the two traces are compared over the same hour position
-  trace-warmup: 30
+  trace-warmup: 300
   benchmark-grace-period: 120
   random-seed: 0
 
 search:
-  key: trace-speed-pct
+  key: trace-session-pct  # share of the trace's sessions replayed, in percent
   min: 5
   max: 100
   step: 5

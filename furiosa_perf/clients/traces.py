@@ -11,6 +11,12 @@ stretched by ``100 / speed_pct``. To keep every point about as long, a point use
 only the part of the trace, from a chosen start, that fits its wall-clock duration
 at that speed.
 
+A point can also keep only a share of the trace's sessions (``session_pct``): the
+load then scales by the number of conversations while every kept conversation keeps
+its recorded timing, so a prefix cached by one turn is asked for by the next turn as
+late as it was in production. Stretching time instead would push those turns out of
+the point's window.
+
 A trace starts with an empty cache, unlike a service that has been running. So a
 point can start mid-trace and first warm the cache with the requests recorded just
 before its start; their prompts fill the prefix cache as the service's history
@@ -21,6 +27,7 @@ import hashlib
 import json
 import os
 import urllib.request
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -29,6 +36,9 @@ from furiosa_perf.log import logger
 
 # Mooncake traces hash prompts in blocks of this many tokens.
 MOONCAKE_BLOCK_SIZE = 512
+# A block held by more than this share of a trace's requests is a shared prompt (system prompt, tool
+# definitions), not part of one session.
+SHARED_BLOCK_SHARE = 0.01
 
 
 def datasets_dir() -> Path:
@@ -79,6 +89,8 @@ class TraceWindow:
             exceeds the server's maximum length.
         offered_req_per_s: Mean request rate offered to the server.
         warmup_requests: Requests recorded before the slice, sent first to warm the cache.
+        session_pct: Share of the trace's sessions kept, in percent (100 = every request).
+        sessions: Distinct sessions among the replayed requests.
     """
 
     speed_pct: int
@@ -88,10 +100,41 @@ class TraceWindow:
     dropped_too_long: int
     offered_req_per_s: float
     warmup_requests: int = 0
+    session_pct: int = 100
+    sessions: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """The window as plain data for ``record.json``."""
         return asdict(self)
+
+
+def session_keys(rows: list[dict[str, Any]]) -> list[int]:
+    """The session each request belongs to: the id of its first block that is not a shared prompt.
+
+    Mooncake traces carry no session ids, but the turns of one conversation send the same
+    leading blocks. Blocks held by more than :data:`SHARED_BLOCK_SHARE` of the requests
+    (the system prompt, tool definitions) are skipped, so the key is the first block of
+    the user's own content; a request made only of shared blocks is keyed by its last block.
+
+    Args:
+        rows: The whole trace, so a block's share is judged against every request.
+
+    Returns:
+        One key per row, in order.
+    """
+    counts = Counter(block for row in rows for block in row["hash_ids"])
+    limit = len(rows) * SHARED_BLOCK_SHARE
+    keys = []
+    for row in rows:
+        blocks = row["hash_ids"]
+        own = next((block for block in blocks if counts[block] <= limit), None)
+        keys.append(own if own is not None else (blocks[-1] if blocks else -1))
+    return keys
+
+
+def _in_sample(key: int, session_pct: int) -> bool:
+    """Whether a session is among the ``session_pct`` percent kept; a smaller share is a subset of a larger one."""
+    return session_pct >= 100 or key % 100 < session_pct
 
 
 def _fits(row: dict[str, Any], max_total_tokens: int | None) -> bool:
@@ -105,8 +148,9 @@ def scale_trace(
     wall_seconds: float,
     max_total_tokens: int | None,
     start_seconds: float = 0.0,
+    session_pct: int = 100,
 ) -> tuple[list[dict[str, Any]], TraceWindow]:
-    """Cut the part of a trace that lasts ``wall_seconds`` at ``speed_pct`` and stretch its timestamps.
+    """Cut the part of a trace that lasts ``wall_seconds`` at ``speed_pct``, keep ``session_pct`` of its sessions, and stretch its timestamps.
 
     Args:
         rows: Trace requests sorted by ``timestamp`` (ms from the trace start).
@@ -115,6 +159,9 @@ def scale_trace(
         max_total_tokens: Drop requests whose input plus output exceeds this
             (the server's maximum length); ``None`` keeps all.
         start_seconds: Recorded time, from the first request, where the slice starts.
+        session_pct: Share of the trace's sessions to keep, in percent (see :func:`session_keys`);
+            the sessions kept at a smaller share are a subset of those at a larger one, so a
+            capacity search over it steps through nested loads.
 
     Returns:
         The requests to replay, with timestamps rebased to 0 and stretched, and a
@@ -122,10 +169,11 @@ def scale_trace(
     """
     start = (rows[0]["timestamp"] if rows else 0) + start_seconds * 1000
     trace_ms = wall_seconds * 1000 * speed_pct / 100
-    window = [r for r in rows if 0 <= r["timestamp"] - start <= trace_ms]
-    kept = [r for r in window if _fits(r, max_total_tokens)]
+    keys = session_keys(rows)
+    window = [(r, k) for r, k in zip(rows, keys) if 0 <= r["timestamp"] - start <= trace_ms and _in_sample(k, session_pct)]
+    kept = [(r, k) for r, k in window if _fits(r, max_total_tokens)]
     stretch = 100 / speed_pct
-    scaled = [{**r, "timestamp": round((r["timestamp"] - start) * stretch)} for r in kept]
+    scaled = [{**r, "timestamp": round((r["timestamp"] - start) * stretch)} for r, _ in kept]
     info = TraceWindow(
         speed_pct=speed_pct,
         start_seconds=start_seconds,
@@ -133,14 +181,23 @@ def scale_trace(
         requests=len(scaled),
         dropped_too_long=len(window) - len(kept),
         offered_req_per_s=round(len(scaled) / wall_seconds, 3) if wall_seconds > 0 else 0.0,
+        session_pct=session_pct,
+        sessions=len({k for _, k in kept}),
     )
     return scaled, info
 
 
 def warmup_rows(
-    rows: list[dict[str, Any]], start_seconds: float, warmup_seconds: float, max_total_tokens: int | None
+    rows: list[dict[str, Any]],
+    start_seconds: float,
+    warmup_seconds: float,
+    max_total_tokens: int | None,
+    session_pct: int = 100,
 ) -> list[dict[str, Any]]:
     """The requests recorded in the ``warmup_seconds`` before ``start_seconds``, to fill the cache.
+
+    With ``session_pct`` below 100 only the sampled sessions are warmed: the others are never
+    asked for, and warming them would only take cache space from the sessions measured.
 
     They keep their recorded spacing (full speed: the server queues what it cannot
     take at once, and only the resulting cache matters) and ask for one output
@@ -151,7 +208,12 @@ def warmup_rows(
     """
     start = (rows[0]["timestamp"] if rows else 0) + start_seconds * 1000
     begin = start - warmup_seconds * 1000
-    window = [r for r in rows if begin <= r["timestamp"] < start and _fits(r, max_total_tokens)]
+    keys = session_keys(rows)
+    window = [
+        r
+        for r, k in zip(rows, keys)
+        if begin <= r["timestamp"] < start and _fits(r, max_total_tokens) and _in_sample(k, session_pct)
+    ]
     return [{**r, "timestamp": round(r["timestamp"] - begin), "output_length": 1} for r in window]
 
 

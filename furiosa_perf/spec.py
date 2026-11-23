@@ -302,11 +302,11 @@ CLIENTS = tuple(MANAGED_CLIENT_ARGS)
 KINDS = ("baseline", "scenario")
 # Service-level objectives a preset may set; each limits one latency percentile.
 SLO_KEYS = ("ttft_p95_ms", "tpot_p95_ms")
-# Load options a capacity search may vary: users talking at once, or the replay
-# speed of a request trace in percent of its recorded speed.
-SEARCH_KEYS = ("concurrency", "trace-speed-pct")
+# Load options a capacity search may vary: users talking at once, the replay speed of a
+# request trace in percent of its recorded speed, or the share of the trace's sessions replayed.
+SEARCH_KEYS = ("concurrency", "trace-speed-pct", "trace-session-pct")
 # Point options furiosa-perf itself consumes when replaying a trace (not passed to the client).
-TRACE_POINT_KEYS = ("trace-speed-pct", "trace-duration", "trace-start", "trace-warmup")
+TRACE_POINT_KEYS = ("trace-speed-pct", "trace-session-pct", "trace-duration", "trace-start", "trace-warmup")
 # When the server is restarted: "never" (one server for the run) or "per-point"
 # (a fresh server before every point, so no point inherits another's cache or state).
 RESTART_POLICIES = ("never", "per-point")

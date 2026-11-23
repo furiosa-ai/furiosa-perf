@@ -34,6 +34,7 @@ SCENARIO_LOAD_PREFIXES = {
     "num-users": "n",
     "request-rate": "r",
     "trace-speed-pct": "s",
+    "trace-session-pct": "sess",
 }
 
 

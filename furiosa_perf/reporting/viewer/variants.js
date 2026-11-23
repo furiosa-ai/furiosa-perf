@@ -5,6 +5,7 @@
 // The load a scenario steps through: summary column and the run's capacity field.
 const LOADS = [
   { col: 'Users', cap: 'max_users', label: 'users' },
+  { col: 'Trace Sessions(%)', cap: 'max_session_pct', label: '% of trace sessions' },
   { col: 'Trace Speed(%)', cap: 'max_speed_pct', label: '% trace speed' },
 ];
 // Point values compared at one load: column, label, higher is better.
